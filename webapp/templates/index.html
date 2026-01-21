@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fishing Drone Desktop Planner</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; display: flex; height: 100vh; }
+        
+        #sidebar {
+            width: 350px;
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        #map { flex: 1; }
+        
+        h1 { font-size: 24px; margin-bottom: 20px; color: #3498db; }
+        h2 { font-size: 18px; margin: 20px 0 10px 0; }
+        
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #34495e;
+        }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            margin: 5px 0;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary { background: #3498db; color: white; }
+        .btn-primary:hover { background: #2980b9; }
+        
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #229954; }
+        
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-danger:hover { background: #c0392b; }
+        
+        input[type="file"], input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            background: #34495e;
+            color: white;
+            border: 1px solid #7f8c8d;
+        }
+        
+        .stats {
+            background: #34495e;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h1>🎣 Desktop Mission Planner</h1>
+        
+        <div class="section">
+            <h2>1. Upload INAV Mission (Optional)</h2>
+            <input type="file" id="mission-file" accept=".mission" />
+            <button class="btn-primary" onclick="uploadMission()">Load Mission</button>
+        </div>
+        
+        <div class="section">
+            <h2>2. Plot Drop Locations</h2>
+            <p style="color: #95a5a6; font-size: 14px;">Click on map to add drops</p>
+            <div class="stats">
+                <div class="stat-item">
+                    <span>Waypoints:</span>
+                    <span id="waypoint-count">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Drops:</span>
+                    <span id="drop-count">0</span>
+                </div>
+            </div>
+            <button class="btn-danger" onclick="clearDrops()">Clear Drops</button>
+        </div>
+        
+        <div class="section">
+            <h2>3. Save & Export</h2>
+            <input type="text" id="mission-name" placeholder="Mission name..." value="fishing_1" />
+            <button class="btn-success" onclick="saveMission()">Save Mission</button>
+            <button class="btn-primary" onclick="exportJSON()">Export JSON</button>
+        </div>
+        
+        <div class="section">
+            <h2>4. Send to Drone</h2>
+            <input type="text" id="drone-ip" placeholder="Drone IP (e.g., 192.168.4.1)" value="192.168.4.1" />
+            <button class="btn-success" onclick="sendToDrone()">📡 Send to Drone</button>
+        </div>
+    </div>
+    
+    <div id="map"></div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map').setView([41.1413, -73.3579], 13);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+        
+        let waypoints = [];
+        let drops = [];
+        let markers = [];
+        
+        map.on('click', (e) => {
+            drops.push({ lat: e.latlng.lat, lon: e.latlng.lng, alt: 50 });
+            
+            const marker = L.circleMarker([e.latlng.lat, e.latlng.lng], {
+                radius: 10,
+                fillColor: '#e74c3c',
+                color: 'white',
+                weight: 3,
+                fillOpacity: 0.8
+            }).addTo(map);
+            
+            markers.push(marker);
+            updateStats();
+        });
+        
+        function clearDrops() {
+            drops = [];
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+            updateStats();
+        }
+        
+        function updateStats() {
+            document.getElementById('waypoint-count').textContent = waypoints.length;
+            document.getElementById('drop-count').textContent = drops.length;
+        }
+        
+        async function uploadMission() {
+            const file = document.getElementById('mission-file').files[0];
+            if (!file) return alert('Select a file');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const response = await fetch('/api/upload_mission', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                waypoints = data.waypoints;
+                alert(`Loaded ${data.count} waypoints`);
+                updateStats();
+            }
+        }
+        
+        async function saveMission() {
+            const name = document.getElementById('mission-name').value;
+            
+            const response = await fetch('/api/save_mission', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mission_name: name, drops: drops })
+            });
+            
+            const data = await response.json();
+            alert(data.success ? 'Saved!' : 'Failed');
+        }
+        
+        function exportJSON() {
+            const data = JSON.stringify({ drops: drops }, null, 2);
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mission.json';
+            a.click();
+        }
+        
+        async function sendToDrone() {
+            const ip = document.getElementById('drone-ip').value;
+            
+            const response = await fetch(`http://${ip}/api/upload_mission`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ drops: drops })
+            });
+            
+            const data = await response.json();
+            alert(data.success ? 'Sent to drone!' : 'Failed: ' + data.error);
+        }
+        
+        updateStats();
+    </script>
+</body>
+</html>
