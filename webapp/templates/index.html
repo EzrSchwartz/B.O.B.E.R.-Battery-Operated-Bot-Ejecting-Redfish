@@ -1,114 +1,63 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Fishing Drone Desktop Planner</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <title>Fishing Drone Planner</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; display: flex; height: 100vh; }
-        
-        #sidebar {
-            width: 350px;
-            background: #2c3e50;
-            color: white;
-            padding: 20px;
-            overflow-y: auto;
-        }
-        
+        body { font-family: Arial, sans-serif; display: flex; height: 100vh; }
+        #sidebar { width: 320px; background: #2c3e50; color: white; padding: 20px; overflow-y: auto; }
         #map { flex: 1; }
-        
         h1 { font-size: 24px; margin-bottom: 20px; color: #3498db; }
-        h2 { font-size: 18px; margin: 20px 0 10px 0; }
-        
-        .section {
-            margin-bottom: 30px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #34495e;
-        }
-        
-        button {
-            width: 100%;
-            padding: 12px;
-            margin: 5px 0;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s;
-        }
-        
+        h2 { font-size: 18px; margin: 20px 0 10px; }
+        .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #34495e; }
+        button { width: 100%; padding: 12px; margin: 5px 0; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn-primary { background: #3498db; color: white; }
-        .btn-primary:hover { background: #2980b9; }
-        
         .btn-success { background: #27ae60; color: white; }
-        .btn-success:hover { background: #229954; }
-        
         .btn-danger { background: #e74c3c; color: white; }
-        .btn-danger:hover { background: #c0392b; }
-        
-        input[type="file"], input[type="text"] {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 4px;
-            background: #34495e;
-            color: white;
-            border: 1px solid #7f8c8d;
-        }
-        
-        .stats {
-            background: #34495e;
-            padding: 15px;
-            border-radius: 4px;
-            margin: 10px 0;
-        }
-        
-        .stat-item {
-            display: flex;
-            justify-content: space-between;
-            margin: 5px 0;
-        }
+        .btn-warning { background: #f39c12; color: white; }
+        input[type="file"], input[type="text"] { width: 100%; padding: 10px; margin: 10px 0; border-radius: 4px; background: #34495e; color: white; border: 1px solid #7f8c8d; }
+        .stats { background: #34495e; padding: 15px; border-radius: 4px; }
+        .stat { display: flex; justify-content: space-between; margin: 5px 0; }
+        textarea { width: 100%; height: 150px; padding: 10px; background: #34495e; color: white; border: 1px solid #7f8c8d; border-radius: 4px; font-family: monospace; font-size: 12px; }
+        .info { background: #34495e; padding: 10px; border-radius: 4px; margin: 10px 0; font-size: 12px; }
     </style>
 </head>
 <body>
     <div id="sidebar">
-        <h1>🎣 Desktop Mission Planner</h1>
+        <h1>🎣 Fishing Drone</h1>
         
         <div class="section">
-            <h2>1. Upload INAV Mission (Optional)</h2>
-            <input type="file" id="mission-file" accept=".mission" />
-            <button class="btn-primary" onclick="uploadMission()">Load Mission</button>
+            <h2>1. Load Mission File</h2>
+            <input type="file" id="file" accept=".mission"/>
+            <button class="btn-primary" onclick="load()">📂 Load Mission</button>
+            <button class="btn-warning" onclick="inspect()">🔍 Inspect File</button>
+            <button class="btn-primary" onclick="testParse()">🧪 Test Parser</button>
+            <div id="file-info" class="info" style="display:none"></div>
         </div>
         
         <div class="section">
             <h2>2. Plot Drop Locations</h2>
-            <p style="color: #95a5a6; font-size: 14px;">Click on map to add drops</p>
+            <p style="font-size:14px;margin:10px 0;opacity:0.8">Click map to add drops</p>
             <div class="stats">
-                <div class="stat-item">
-                    <span>Waypoints:</span>
-                    <span id="waypoint-count">0</span>
-                </div>
-                <div class="stat-item">
-                    <span>Drops:</span>
-                    <span id="drop-count">0</span>
-                </div>
+                <div class="stat"><span>Waypoints:</span><span id="wps">0</span></div>
+                <div class="stat"><span>Drops:</span><span id="drops">0</span></div>
             </div>
-            <button class="btn-danger" onclick="clearDrops()">Clear Drops</button>
+            <button class="btn-danger" onclick="clear()">Clear All</button>
         </div>
         
         <div class="section">
-            <h2>3. Save & Export</h2>
-            <input type="text" id="mission-name" placeholder="Mission name..." value="fishing_1" />
-            <button class="btn-success" onclick="saveMission()">Save Mission</button>
-            <button class="btn-primary" onclick="exportJSON()">Export JSON</button>
+            <h2>3. Manual Input (Test)</h2>
+            <textarea id="manual" placeholder="Paste mission file content here..."></textarea>
+            <button class="btn-primary" onclick="testManual()">Test Parse</button>
         </div>
         
         <div class="section">
-            <h2>4. Send to Drone</h2>
-            <input type="text" id="drone-ip" placeholder="Drone IP (e.g., 192.168.4.1)" value="192.168.4.1" />
-            <button class="btn-success" onclick="sendToDrone()">📡 Send to Drone</button>
+            <h2>4. Save & Deploy</h2>
+            <input type="text" id="name" value="mission_1"/>
+            <button class="btn-success" onclick="save()">💾 Save Mission</button>
+            <button class="btn-success" onclick="send()">📡 Send to Drone</button>
         </div>
     </div>
     
@@ -117,99 +66,220 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         const map = L.map('map').setView([41.1413, -73.3579], 13);
-        
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap'
         }).addTo(map);
         
-        let waypoints = [];
-        let drops = [];
-        let markers = [];
+        let waypoints = [], drops = [], markers = [], wpMarkers = [];
         
-        map.on('click', (e) => {
+        map.on('click', e => {
             drops.push({ lat: e.latlng.lat, lon: e.latlng.lng, alt: 50 });
-            
-            const marker = L.circleMarker([e.latlng.lat, e.latlng.lng], {
+            const m = L.circleMarker([e.latlng.lat, e.latlng.lng], {
                 radius: 10,
                 fillColor: '#e74c3c',
                 color: 'white',
                 weight: 3,
-                fillOpacity: 0.8
+                fillOpacity: 0.9
             }).addTo(map);
-            
-            markers.push(marker);
-            updateStats();
+            m.bindPopup(`Drop #${drops.length}<br>${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`);
+            markers.push(m);
+            update();
         });
         
-        function clearDrops() {
+        function update() {
+            document.getElementById('wps').textContent = waypoints.length;
+            document.getElementById('drops').textContent = drops.length;
+        }
+        
+        function clear() {
+            if (!confirm('Clear all drops?')) return;
             drops = [];
             markers.forEach(m => map.removeLayer(m));
             markers = [];
-            updateStats();
+            update();
         }
         
-        function updateStats() {
-            document.getElementById('waypoint-count').textContent = waypoints.length;
-            document.getElementById('drop-count').textContent = drops.length;
-        }
-        
-        async function uploadMission() {
-            const file = document.getElementById('mission-file').files[0];
-            if (!file) return alert('Select a file');
+        async function load() {
+            const file = document.getElementById('file').files[0];
+            if (!file) {
+                alert('Please select a .mission file');
+                return;
+            }
             
             const formData = new FormData();
             formData.append('file', file);
             
-            const response = await fetch('/api/upload_mission', {
-                method: 'POST',
-                body: formData
-            });
-            
-            const data = await response.json();
-            if (data.success) {
-                waypoints = data.waypoints;
-                alert(`Loaded ${data.count} waypoints`);
-                updateStats();
+            try {
+                const r = await fetch('/api/upload', { method: 'POST', body: formData });
+                const d = await r.json();
+                
+                console.log('Upload response:', d);
+                
+                if (d.success) {
+                    if (d.count === 0) {
+                        alert(`⚠️ No waypoints found in file!\n\nClick "Inspect File" to see what's in the file.\n\nCheck the terminal where Flask is running for detailed parsing logs.`);
+                    } else {
+                        waypoints = d.waypoints;
+                        
+                        // Clear old waypoint markers
+                        wpMarkers.forEach(m => map.removeLayer(m));
+                        wpMarkers = [];
+                        
+                        // Add waypoint markers
+                        waypoints.forEach((w, i) => {
+                            const m = L.circleMarker([w.lat, w.lon], {
+                                radius: 8,
+                                fillColor: '#3498db',
+                                color: 'white',
+                                weight: 2,
+                                fillOpacity: 0.8
+                            }).addTo(map);
+                            
+                            m.bindPopup(`<b>Waypoint ${w.index}</b><br>Lat: ${w.lat.toFixed(6)}<br>Lon: ${w.lon.toFixed(6)}<br>Alt: ${w.alt}m`);
+                            wpMarkers.push(m);
+                        });
+                        
+                        // Fit map to waypoints
+                        if (waypoints.length > 0) {
+                            const bounds = L.latLngBounds(waypoints.map(w => [w.lat, w.lon]));
+                            map.fitBounds(bounds, { padding: [50, 50] });
+                        }
+                        
+                        alert(`✓ Loaded ${d.count} waypoints from ${file.name}`);
+                        update();
+                    }
+                } else {
+                    alert('Error: ' + d.error);
+                }
+            } catch (e) {
+                alert('Upload failed: ' + e.message);
+                console.error(e);
             }
         }
         
-        async function saveMission() {
-            const name = document.getElementById('mission-name').value;
+        async function inspect() {
+            const file = document.getElementById('file').files[0];
+            if (!file) {
+                alert('Select a file first');
+                return;
+            }
             
-            const response = await fetch('/api/save_mission', {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const r = await fetch('/api/inspect', { method: 'POST', body: formData });
+                const d = await r.json();
+                
+                console.log('File inspection:', d);
+                
+                let info = `FILE INSPECTION\n\n`;
+                info += `Lines: ${d.total_lines}\n`;
+                info += `Has tabs: ${d.has_tabs}\n`;
+                info += `Has commas: ${d.has_commas}\n\n`;
+                
+                if (d.sample_line) {
+                    info += `Sample line:\n"${d.sample_line.original}"\n\n`;
+                    info += `Tab-separated: ${d.sample_line.parts_tab.length} parts\n`;
+                    info += `Space-separated: ${d.sample_line.parts_space.length} parts\n`;
+                    info += `Comma-separated: ${d.sample_line.parts_comma.length} parts\n\n`;
+                }
+                
+                info += `First 5 lines:\n`;
+                d.first_10.slice(0, 5).forEach((line, i) => {
+                    info += `${i+1}: ${line}\n`;
+                });
+                
+                info += `\n\nFull details in console (F12)`;
+                
+                alert(info);
+                
+                document.getElementById('file-info').style.display = 'block';
+                document.getElementById('file-info').textContent = 
+                    `Lines: ${d.total_lines} | Tabs: ${d.has_tabs} | Sample parts: ${d.sample_line?.parts_space.length || 0}`;
+                
+            } catch (e) {
+                alert('Inspect failed: ' + e.message);
+                console.error(e);
+            }
+        }
+        
+        async function testParse() {
+            const file = document.getElementById('file').files[0];
+            if (!file) {
+                alert('Select a file first');
+                return;
+            }
+            
+            const text = await file.text();
+            document.getElementById('manual').value = text;
+            testManual();
+        }
+        
+        async function testManual() {
+            const text = document.getElementById('manual').value;
+            if (!text) {
+                alert('Paste mission file content');
+                return;
+            }
+            
+            try {
+                const r = await fetch('/api/test_parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text })
+                });
+                const d = await r.json();
+                
+                console.log('Test parse result:', d);
+                
+                if (d.count > 0) {
+                    alert(`✓ Parser found ${d.count} waypoints!\n\nCheck console (F12) for details.`);
+                } else {
+                    alert(`✗ Parser found 0 waypoints.\n\nPossible issues:\n- Wrong format\n- Missing data\n- Invalid coordinates\n\nCheck terminal where Flask is running for detailed logs.`);
+                }
+            } catch (e) {
+                alert('Test failed: ' + e.message);
+            }
+        }
+        
+        async function save() {
+            const name = document.getElementById('name').value;
+            
+            const r = await fetch('/api/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mission_name: name, drops: drops })
+                body: JSON.stringify({ name, drops, waypoints })
             });
+            const d = await r.json();
             
-            const data = await response.json();
-            alert(data.success ? 'Saved!' : 'Failed');
+            alert(d.success ? `Saved as ${d.filename}` : 'Save failed');
         }
         
-        function exportJSON() {
-            const data = JSON.stringify({ drops: drops }, null, 2);
-            const blob = new Blob([data], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'mission.json';
-            a.click();
+        async function send() {
+            if (drops.length === 0) {
+                alert('Add drop locations first');
+                return;
+            }
+            
+            const ip = prompt('Enter drone IP address:', '192.168.4.1');
+            if (!ip) return;
+            
+            try {
+                const r = await fetch(`http://${ip}/api/upload`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ drops })
+                });
+                const d = await r.json();
+                
+                alert(d.success ? `✓ Sent ${drops.length} drops to drone!` : 'Send failed: ' + d.error);
+            } catch (e) {
+                alert('Connection failed: ' + e.message + '\n\nMake sure:\n1. Connected to drone WiFi\n2. Drone is powered on\n3. IP is correct');
+            }
         }
         
-        async function sendToDrone() {
-            const ip = document.getElementById('drone-ip').value;
-            
-            const response = await fetch(`http://${ip}/api/upload_mission`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ drops: drops })
-            });
-            
-            const data = await response.json();
-            alert(data.success ? 'Sent to drone!' : 'Failed: ' + data.error);
-        }
-        
-        updateStats();
+        update();
     </script>
 </body>
 </html>
