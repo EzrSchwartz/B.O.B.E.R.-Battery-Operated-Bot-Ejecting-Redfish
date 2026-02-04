@@ -1,0 +1,29 @@
+{
+  "drops": [
+    {
+      "name": "Drop 1",
+      "lat": 41.1900805,
+      "lon": -73.3360219,
+      "alt": 50
+    },
+    {
+      "name": "Drop 2", 
+      "lat": 41.189385,
+      "lon": -73.3342699,
+      "alt": 50
+    },
+    {
+      "name": "Drop 3",
+      "lat": 41.1884008,
+      "lon": -73.335599,
+      "alt": 50
+    }
+  ],
+  "settings": {
+    "waypoint_radius": 3.0,
+    "drop_cooldown": 30.0,
+    "servo_release_angle": 90,
+    "servo_reset_angle": 0,
+    "collision_threshold": 800
+  }
+}

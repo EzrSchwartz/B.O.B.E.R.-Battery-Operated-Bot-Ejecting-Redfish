@@ -1,6 +1,9 @@
+
+
+
 # """
-# Fishing Drone - ESP32-S3 Controller
-# Handles: WiFi web server, MSP communication with FC, camera obstacle detection, SBUS control
+# Fishing Drone Autonomous System
+# ESP32-S3 Feather with Camera + INAV Integration
 # """
 
 # import board
@@ -15,171 +18,128 @@
 # import digitalio
 
 # # ============================================
-# # Configuration
+# # CONFIGURATION
 # # ============================================
+
+# # WiFi credentials
 # WIFI_SSID = "FishingDrone"
 # WIFI_PASSWORD = "fishing123"
 
 # # Pin assignments
-# SBUS_TX_PIN = board.IO17
-# MSP_TX_PIN = board.IO2
-# MSP_RX_PIN = board.IO4
-
-# # Camera pins
-# CAMERA_PINS = {
-#     'data': [board.IO0, board.IO12, board.IO37, board.IO35,
-#              board.IO14, board.IO18, board.IO11, board.IO33],
-#     'xclk': board.IO38,
-#     'pclk': board.IO1,
-#     'vsync': board.IO3,
-#     'href': board.IO7,
-#     'sda': board.IO8,
-#     'scl': board.IO9,
-#     'pwdn': board.IO43,
-#     'reset': board.IO44
-# }
-
-# # ============================================
-# # MSP Controller Class
-# # ============================================
-# class MSPController:
-#     """
-#     MSP (MultiWii Serial Protocol) for INAV communication
-#     Uploads waypoint missions to flight controller
-#     """
+# class Pins:
+#     # SBUS output to FC
+#     SBUS_TX = board.IO17
     
-#     # MSP Commands
-#     MSP_WP = 118
+#     # MSP serial to FC
+#     MSP_TX = board.IO2
+#     MSP_RX = board.IO4
+    
+#     # Camera pins
+#     CAM_D0 = board.IO0
+#     CAM_D1 = board.IO12
+#     CAM_D2 = board.IO37
+#     CAM_D3 = board.IO35
+#     CAM_D4 = board.IO14
+#     CAM_D5 = board.IO18
+#     CAM_D6 = board.IO11
+#     CAM_D7 = board.IO33
+#     CAM_XCLK = board.IO38
+#     CAM_PCLK = board.IO1
+#     CAM_VSYNC = board.IO3
+#     CAM_HREF = board.IO7
+#     CAM_SDA = board.IO8
+#     CAM_SCL = board.IO9
+#     CAM_PWDN = board.IO43
+#     CAM_RESET = board.IO44
+    
+#     # Status LED
+#     LED = board.LED
+
+# # ============================================
+# # MSP PROTOCOL CLASS
+# # ============================================
+
+# class MSP:
+#     """MSP protocol for INAV communication"""
+    
+#     # Command IDs
 #     MSP_SET_WP = 209
 #     MSP_WP_MISSION_SAVE = 46
-#     MSP_NAV_STATUS = 121
-#     MSP_STATUS = 101
     
 #     def __init__(self, uart):
 #         self.uart = uart
-#         print("MSP Controller initialized")
     
-#     def send_command(self, cmd, data=b''):
-#         """Send MSP command to FC"""
-#         size = len(data)
-#         checksum = size ^ cmd
-        
+#     def _checksum(self, data):
+#         """Calculate XOR checksum"""
+#         csum = len(data)
 #         for byte in data:
-#             checksum ^= byte
-        
-#         # MSP v1 format: $M<size><cmd><data><checksum>
-#         packet = bytearray([ord('$'), ord('M'), ord('<'), size, cmd])
-#         packet.extend(data)
-#         packet.append(checksum)
+#             csum ^= byte
+#         return csum
+    
+#     def send_command(self, cmd, payload=b''):
+#         """Send MSP command"""
+#         packet = bytearray([ord('$'), ord('M'), ord('<')])
+#         packet.append(len(payload))
+#         packet.append(cmd)
+#         packet.extend(payload)
+#         packet.append(self._checksum(payload) ^ cmd)
         
 #         self.uart.write(packet)
     
-#     def read_response(self, timeout=1.0):
-#         """Read MSP response from FC"""
-#         start = time.monotonic()
-#         buffer = bytearray()
-        
-#         while time.monotonic() - start < timeout:
-#             if self.uart.in_waiting > 0:
-#                 buffer.extend(self.uart.read(self.uart.in_waiting))
-                
-#                 # Check for complete packet
-#                 if len(buffer) >= 6:
-#                     if buffer[0] == ord('$') and buffer[1] == ord('M') and buffer[2] == ord('>'):
-#                         size = buffer[3]
-#                         if len(buffer) >= 6 + size:
-#                             return buffer[5:5+size]
-            
-#             time.sleep(0.01)
-        
-#         return None
-    
-#     def upload_waypoint_mission(self, drops):
+#     def set_waypoint(self, number, lat, lon, alt, action=2):
 #         """
-#         Upload waypoint mission to INAV
-#         Converts drop locations to INAV waypoints
+#         Upload waypoint to INAV
+#         action: 1=Waypoint, 2=PosHold, 3=RTH
 #         """
-#         if len(drops) == 0:
-#             print("No waypoints to upload")
-#             return False
-        
-#         print(f"Uploading {len(drops)} waypoints to INAV...")
-        
-#         try:
-#             # Waypoint 0: Home/RTH (required by INAV)
-#             self.upload_waypoint(0, 0, 0, 0, waypoint_type=1)
-#             time.sleep(0.1)
-            
-#             # Upload each drop location
-#             for i, drop in enumerate(drops):
-#                 wp_number = i + 1
-                
-#                 lat = int(drop['lat'] * 1e7)
-#                 lon = int(drop['lon'] * 1e7)
-#                 alt = int(drop.get('alt', 50))
-                
-#                 # Waypoint type: 2 = Position Hold (hover for drop)
-#                 self.upload_waypoint(wp_number, lat, lon, alt, waypoint_type=2)
-                
-#                 print(f"  ✓ Waypoint {wp_number}: {drop['lat']:.6f}, {drop['lon']:.6f}")
-#                 time.sleep(0.1)
-            
-#             # Save mission to FC EEPROM
-#             self.send_command(self.MSP_WP_MISSION_SAVE)
-#             time.sleep(0.5)
-            
-#             print("✓ Mission uploaded successfully!")
-#             return True
-            
-#         except Exception as e:
-#             print(f"✗ Mission upload failed: {e}")
-#             return False
-    
-#     def upload_waypoint(self, wp_number, lat, lon, alt, waypoint_type=1):
-#         """Upload single waypoint to INAV"""
-#         # INAV waypoint structure (MSP_SET_WP)
-#         data = struct.pack(
+#         payload = struct.pack(
 #             '<BB iii hhh B',
-#             wp_number,        # Waypoint number
-#             waypoint_type,    # Action: 1=Waypoint, 2=PosHold, 3=RTH
-#             lat,              # Latitude * 1e7
-#             lon,              # Longitude * 1e7
-#             alt * 100,        # Altitude in cm
-#             0, 0, 0,         # Parameters (speed, etc)
-#             0                 # Flag
+#             number,          # WP number
+#             action,          # Action type
+#             int(lat * 1e7),  # Latitude
+#             int(lon * 1e7),  # Longitude
+#             int(alt * 100),  # Altitude (cm)
+#             0, 0, 0,        # Parameters
+#             0               # Flag
 #         )
         
-#         self.send_command(self.MSP_SET_WP, data)
-#         response = self.read_response()
-        
-#         return response is not None
+#         self.send_command(self.MSP_SET_WP, payload)
+#         time.sleep(0.05)
     
-#     def get_nav_status(self):
-#         """Query navigation status from INAV"""
-#         self.send_command(self.MSP_NAV_STATUS)
-#         response = self.read_response()
+#     def save_mission(self):
+#         """Save mission to FC EEPROM"""
+#         self.send_command(self.MSP_WP_MISSION_SAVE)
+#         time.sleep(0.5)
+    
+#     def upload_mission(self, drops):
+#         """Upload complete mission"""
+#         print(f"Uploading {len(drops)} waypoints to INAV...")
         
-#         if response and len(response) >= 7:
-#             nav_mode = response[0]
-#             nav_state = response[1]
-#             current_wp = response[4]
-            
-#             return {
-#                 'nav_mode': nav_mode,
-#                 'nav_state': nav_state,
-#                 'current_wp': current_wp
-#             }
+#         # Waypoint 0: Home/RTH
+#         self.set_waypoint(0, 0, 0, 0, action=1)
         
-#         return None
+#         # Upload drops
+#         for i, drop in enumerate(drops):
+#             wp_num = i + 1
+#             self.set_waypoint(
+#                 wp_num,
+#                 drop['lat'],
+#                 drop['lon'],
+#                 drop.get('alt', 50),
+#                 action=2  # Position hold
+#             )
+#             print(f"  WP{wp_num}: {drop['lat']:.6f}, {drop['lon']:.6f}")
+        
+#         # Save to FC
+#         self.save_mission()
+#         print("✓ Mission uploaded!")
+#         return True
 
 # # ============================================
-# # SBUS Transmitter Class
+# # SBUS PROTOCOL CLASS
 # # ============================================
-# class SBUSTransmitter:
-#     """
-#     SBUS protocol transmitter for FC control
-#     Sends RC commands at 70Hz
-#     """
+
+# class SBUS:
+#     """SBUS protocol for RC control"""
     
 #     def __init__(self, tx_pin):
 #         self.uart = busio.UART(
@@ -192,275 +152,160 @@
 #             timeout=0
 #         )
 #         self.channels = [992] * 16
-#         print(f"SBUS initialized on {tx_pin}")
     
-#     def set_channel(self, channel, value):
-#         """Set channel value (0-15, 172-1811)"""
+#     def set(self, channel, value):
+#         """Set channel (0-15) to value (172-1811)"""
 #         if 0 <= channel < 16:
 #             self.channels[channel] = max(172, min(1811, value))
     
-#     def _pack_channels(self):
-#         """Pack 16 11-bit channels into bytes"""
-#         bit_string = 0
-#         for i, channel in enumerate(self.channels):
-#             bit_string |= (channel & 0x7FF) << (i * 11)
-        
-#         packed = []
-#         for i in range(22):
-#             packed.append((bit_string >> (i * 8)) & 0xFF)
-        
-#         return bytes(packed)
-    
-#     def build_packet(self):
-#         """Build complete SBUS packet"""
-#         packet = bytearray(25)
-#         packet[0] = 0x0F                    # Start byte
-#         packet[1:23] = self._pack_channels()  # Channel data
-#         packet[23] = 0x00                    # Flags
-#         packet[24] = 0x00                    # End byte
-#         return bytes(packet)
-    
-#     def send_packet(self):
+#     def send(self):
 #         """Send SBUS packet"""
-#         self.uart.write(self.build_packet())
+#         # Pack 16 channels (11 bits each)
+#         bits = 0
+#         for i, ch in enumerate(self.channels):
+#             bits |= (ch & 0x7FF) << (i * 11)
+        
+#         # Build packet
+#         packet = bytearray(25)
+#         packet[0] = 0x0F  # Header
+        
+#         for i in range(22):
+#             packet[i + 1] = (bits >> (i * 8)) & 0xFF
+        
+#         packet[23] = 0x00  # Flags
+#         packet[24] = 0x00  # Footer
+        
+#         self.uart.write(bytes(packet))
 
 # # ============================================
-# # Two-Stage Collision Detector Class
+# # COLLISION DETECTOR CLASS
 # # ============================================
-# class TwoStageCollisionDetector:
-#     """
-#     Fast collision detection using two-stage pipeline:
-#     Stage 1: Fast edge detection (every frame)
-#     Stage 2: Direction analysis (only when obstacle detected)
-#     """
+
+# class CollisionDetector:
+#     """Fast two-stage collision detection"""
     
 #     def __init__(self, camera):
-#         self.camera = camera
-#         self.prev_frame = None
+#         self.cam = camera
 #         self.prev_gray = None
-        
-#         # Tunable thresholds
 #         self.edge_threshold = 800
-#         self.collision_threshold = 60
     
-#     def detect_collision(self):
-#         """
-#         Two-stage collision detection
-#         Returns: (collision_imminent, direction, velocity_estimate)
-#         """
-#         frame = self.camera.take(1)
+#     def detect(self):
+#         """Returns (collision, direction, severity)"""
+#         frame = self.cam.take(1)
 #         if not frame:
 #             return False, None, None
         
-#         # STAGE 1: Fast edge detection
-#         edge_count = self.fast_edge_detection(frame, 160, 120)
+#         # Stage 1: Fast edge detection
+#         edges = self._count_edges(frame)
         
-#         if edge_count < self.edge_threshold:
-#             self.prev_frame = frame
+#         if edges < self.edge_threshold:
 #             return False, None, None
         
-#         # STAGE 2: Full analysis - obstacle detected
-#         gray = self.rgb565_to_gray(frame)
-#         direction, confidence = self.analyze_direction_vector(gray, 160, 120)
+#         # Stage 2: Analyze direction
+#         gray = self._to_gray(frame)
+#         direction = self._find_direction(gray)
+#         severity = "high" if edges > 1500 else "medium"
         
-#         velocity = None
-#         if self.prev_gray is not None:
-#             velocity = self.estimate_velocity(gray, self.prev_gray, 160, 120)
-        
-#         self.prev_frame = frame
 #         self.prev_gray = gray
-        
-#         if confidence > self.collision_threshold:
-#             return True, direction, velocity
-        
-#         return False, None, None
+#         return True, direction, severity
     
-#     def fast_edge_detection(self, frame, width, height):
-#         """Stage 1: Ultra-fast edge detection on RGB565"""
-#         edge_count = 0
+#     def _count_edges(self, frame):
+#         """Stage 1: Count edges in center"""
+#         count = 0
+#         w, h = 160, 120
         
-#         x_start = width // 5
-#         x_end = 4 * width // 5
-#         y_start = height // 5
-#         y_end = 4 * height // 5
+#         for y in range(h//4, 3*h//4, 2):
+#             for x in range(w//4, 3*w//4, 2):
+#                 idx = (y * w + x) * 2
+#                 if idx + w*2 < len(frame):
+#                     r1 = frame[idx] >> 3
+#                     r2 = frame[idx + 2] >> 3
+#                     r3 = frame[idx + w*2] >> 3
+                    
+#                     if abs(r1 - r2) > 3 or abs(r1 - r3) > 3:
+#                         count += 1
         
-#         for y in range(y_start, y_end - 1, 2):
-#             row_start = y * width * 2
-            
-#             for x in range(x_start, x_end - 1, 2):
-#                 idx = row_start + x * 2
-                
-#                 if idx + width * 2 >= len(frame):
-#                     break
-                
-#                 current_r = frame[idx] >> 3
-#                 right_r = frame[idx + 2] >> 3
-#                 below_r = frame[idx + width * 2] >> 3
-                
-#                 h_edge = abs(current_r - right_r)
-#                 v_edge = abs(current_r - below_r)
-                
-#                 if h_edge > 3 or v_edge > 3:
-#                     edge_count += 1
-        
-#         return edge_count
+#         return count
     
-#     def rgb565_to_gray(self, frame):
+#     def _to_gray(self, frame):
 #         """Convert RGB565 to grayscale"""
 #         gray = bytearray(len(frame) // 2)
-        
 #         for i in range(0, len(frame), 2):
 #             r = (frame[i] >> 3) & 0x1F
 #             g = ((frame[i] & 0x07) << 3) | ((frame[i+1] >> 5) & 0x07)
 #             b = frame[i+1] & 0x1F
-            
 #             gray[i//2] = (r * 19 + g * 38 + b * 7) >> 6
-        
 #         return gray
     
-#     def analyze_direction_vector(self, gray, width, height):
-#         """Stage 2: Direction vector analysis"""
-#         zones = {
-#             'left': 0, 'center': 0, 'right': 0,
-#             'top': 0, 'bottom': 0
-#         }
+#     def _find_direction(self, gray):
+#         """Stage 2: Find obstacle direction"""
+#         w, h = 160, 120
+#         left = center = right = 0
         
-#         for y in range(height - 1):
-#             for x in range(width - 1):
-#                 idx = y * width + x
-                
-#                 if idx + width >= len(gray):
-#                     break
-                
-#                 h_edge = abs(gray[idx] - gray[idx + 1])
-#                 v_edge = abs(gray[idx] - gray[idx + width])
-#                 edge_strength = h_edge + v_edge
-                
-#                 if edge_strength > 20:
-#                     # Classify by position
-#                     if x < width // 3:
-#                         zones['left'] += edge_strength
-#                     elif x > 2 * width // 3:
-#                         zones['right'] += edge_strength
-#                     else:
-#                         zones['center'] += edge_strength
+#         for y in range(h-1):
+#             for x in range(w-1):
+#                 idx = y * w + x
+#                 if idx + w < len(gray):
+#                     edge = abs(gray[idx] - gray[idx+1]) + abs(gray[idx] - gray[idx+w])
                     
-#                     if y < height // 3:
-#                         zones['top'] += edge_strength
-#                     elif y > 2 * height // 3:
-#                         zones['bottom'] += edge_strength
+#                     if edge > 20:
+#                         if x < w//3:
+#                             left += edge
+#                         elif x > 2*w//3:
+#                             right += edge
+#                         else:
+#                             center += edge
         
-#         # Weight center more
-#         zones['center'] *= 2
-        
-#         total = zones['left'] + zones['center'] + zones['right']
-        
-#         if total < 1000:
-#             return None, 0
-        
-#         # Determine direction
-#         max_h = max(zones['left'], zones['center'], zones['right'])
-        
-#         if max_h == zones['left'] and zones['left'] > zones['center'] * 1.3:
-#             direction = "left"
-#         elif max_h == zones['right'] and zones['right'] > zones['center'] * 1.3:
-#             direction = "right"
+#         max_val = max(left, center, right)
+#         if max_val == left:
+#             return "left"
+#         elif max_val == right:
+#             return "right"
 #         else:
-#             if zones['top'] > zones['bottom'] * 1.5:
-#                 direction = "above"
-#             elif zones['bottom'] > zones['top'] * 1.5:
-#                 direction = "below"
-#             else:
-#                 direction = "front"
-        
-#         confidence = min(total // 100, 150)
-        
-#         return direction, confidence
-    
-#     def estimate_velocity(self, current_gray, prev_gray, width, height):
-#         """Estimate approach velocity"""
-#         center_x_start = width // 3
-#         center_x_end = 2 * width // 3
-#         center_y_start = height // 3
-#         center_y_end = 2 * height // 3
-        
-#         density_change = 0
-#         pixel_count = 0
-        
-#         for y in range(center_y_start, center_y_end):
-#             for x in range(center_x_start, center_x_end):
-#                 idx = y * width + x
-                
-#                 if idx < len(current_gray) and idx < len(prev_gray):
-#                     change = abs(current_gray[idx] - prev_gray[idx])
-#                     density_change += change
-#                     pixel_count += 1
-        
-#         avg_change = density_change / pixel_count if pixel_count > 0 else 0
-        
-#         if avg_change > 15:
-#             return "critical"
-#         elif avg_change > 10:
-#             return "fast"
-#         elif avg_change > 5:
-#             return "medium"
-#         else:
-#             return "slow"
+#             return "front"
 
 # # ============================================
-# # Web Server Class
+# # WEB SERVER CLASS
 # # ============================================
-# class DroneWebServer:
-#     """
-#     WiFi web server for mission planning
-#     Serves HTML interface and handles API requests
-#     """
+
+# class WebServer:
+#     """WiFi web server for mission planning"""
     
-#     def __init__(self, msp_controller):
-#         self.msp = msp_controller
-#         self.current_mission = {
-#             'drops': [],
-#             'status': 'idle'
-#         }
+#     def __init__(self, msp):
+#         self.msp = msp
+#         self.mission = {'drops': [], 'status': 'idle'}
     
 #     def start(self):
-#         """Start WiFi AP and web server"""
+#         """Start WiFi AP and HTTP server"""
 #         print("\n" + "="*60)
 #         print("Starting WiFi Access Point...")
-#         print("="*60)
         
 #         wifi.radio.start_ap(WIFI_SSID, WIFI_PASSWORD)
         
-#         print(f"✓ WiFi AP started")
-#         print(f"  SSID: {WIFI_SSID}")
-#         print(f"  Password: {WIFI_PASSWORD}")
-#         print(f"  IP: {wifi.radio.ipv4_address_ap}")
-#         print(f"  URL: http://{wifi.radio.ipv4_address_ap}")
+#         print(f"✓ SSID: {WIFI_SSID}")
+#         print(f"✓ Password: {WIFI_PASSWORD}")
+#         print(f"✓ IP: {wifi.radio.ipv4_address_ap}")
+#         print(f"✓ URL: http://{wifi.radio.ipv4_address_ap}")
 #         print("="*60 + "\n")
         
 #         pool = socketpool.SocketPool(wifi.radio)
-#         server_socket = pool.socket(pool.AF_INET, pool.SOCK_STREAM)
-#         server_socket.bind(('0.0.0.0', 80))
-#         server_socket.listen(1)
-#         server_socket.settimeout(1.0)
-        
-#         print("Web server listening on port 80")
-#         print("Waiting for connections...\n")
+#         server = pool.socket(pool.AF_INET, pool.SOCK_STREAM)
+#         server.bind(('0.0.0.0', 80))
+#         server.listen(1)
+#         server.settimeout(1.0)
         
 #         while True:
 #             try:
-#                 client_socket, client_address = server_socket.accept()
-#                 self.handle_client(client_socket, client_address)
+#                 client, addr = server.accept()
+#                 self._handle(client)
 #             except OSError:
 #                 pass
-            
-#             time.sleep(0.1)
+#             time.sleep(0.01)
     
-#     def handle_client(self, client_socket, client_address):
+#     def _handle(self, client):
 #         """Handle HTTP request"""
 #         try:
-#             request = client_socket.recv(4096).decode('utf-8')
-            
+#             request = client.recv(4096).decode('utf-8')
 #             if not request:
 #                 return
             
@@ -468,1293 +313,803 @@
 #             if len(lines) == 0:
 #                 return
             
-#             request_line = lines[0]
-#             parts = request_line.split(' ')
-            
+#             parts = lines[0].split(' ')
 #             if len(parts) < 2:
 #                 return
             
 #             method, path = parts[0], parts[1]
             
-#             print(f"{method} {path}")
-            
-#             # Route requests
 #             if path == '/':
-#                 self.serve_html(client_socket)
-#             elif path == '/api/status':
-#                 self.api_status(client_socket)
-#             elif path.startswith('/api/upload_mission'):
+#                 self._serve_html(client)
+#             elif path == '/api/upload':
 #                 body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
-#                 self.api_upload_mission(client_socket, body)
-#             elif path == '/api/start_mission':
-#                 self.api_start_mission(client_socket)
+#                 self._api_upload(client, body)
+#             elif path == '/api/status':
+#                 self._api_status(client)
 #             else:
-#                 self.send_404(client_socket)
+#                 client.send(b'HTTP/1.1 404 Not Found\r\n\r\n')
         
 #         except Exception as e:
-#             print(f"Error handling client: {e}")
-        
+#             print(f"Error: {e}")
 #         finally:
-#             client_socket.close()
+#             client.close()
     
-#     def serve_html(self, client_socket):
+#     def _serve_html(self, client):
 #         """Serve web interface"""
 #         html = """<!DOCTYPE html>
 # <html>
 # <head>
-#     <title>Fishing Drone Mission Planner</title>
-#     <meta name="viewport" content="width=device-width, initial-scale=1">
-#     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-#     <style>
-#         * { margin: 0; padding: 0; box-sizing: border-box; }
-#         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
-        
-#         #map { height: 70vh; width: 100%; }
-        
-#         #controls {
-#             padding: 20px;
-#             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-#             color: white;
-#             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-#         }
-        
-#         h1 {
-#             font-size: 28px;
-#             margin-bottom: 20px;
-#             text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
-#         }
-        
-#         .stats {
-#             display: grid;
-#             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-#             gap: 15px;
-#             margin: 20px 0;
-#         }
-        
-#         .stat {
-#             background: rgba(255,255,255,0.2);
-#             padding: 15px;
-#             border-radius: 10px;
-#             backdrop-filter: blur(10px);
-#         }
-        
-#         .stat-label {
-#             font-size: 12px;
-#             opacity: 0.9;
-#             text-transform: uppercase;
-#             letter-spacing: 1px;
-#         }
-        
-#         .stat-value {
-#             font-size: 28px;
-#             font-weight: bold;
-#             margin-top: 5px;
-#         }
-        
-#         .button-group {
-#             display: flex;
-#             gap: 10px;
-#             flex-wrap: wrap;
-#         }
-        
-#         button {
-#             padding: 15px 30px;
-#             border: none;
-#             border-radius: 8px;
-#             font-size: 16px;
-#             font-weight: 600;
-#             cursor: pointer;
-#             transition: all 0.3s ease;
-#             flex: 1;
-#             min-width: 200px;
-#         }
-        
-#         button:hover {
-#             transform: translateY(-2px);
-#             box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-#         }
-        
-#         button:active {
-#             transform: translateY(0);
-#         }
-        
-#         .btn-primary {
-#             background: #3498db;
-#             color: white;
-#         }
-        
-#         .btn-success {
-#             background: #27ae60;
-#             color: white;
-#         }
-        
-#         .btn-danger {
-#             background: #e74c3c;
-#             color: white;
-#         }
-        
-#         .btn-warning {
-#             background: #f39c12;
-#             color: white;
-#         }
-        
-#         #status {
-#             position: fixed;
-#             top: 20px;
-#             right: 20px;
-#             padding: 15px 25px;
-#             border-radius: 10px;
-#             font-weight: 600;
-#             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-#             display: none;
-#             z-index: 10000;
-#             animation: slideIn 0.3s ease;
-#         }
-        
-#         @keyframes slideIn {
-#             from { transform: translateX(400px); opacity: 0; }
-#             to { transform: translateX(0); opacity: 1; }
-#         }
-        
-#         .status-success { background: #27ae60; color: white; }
-#         .status-error { background: #e74c3c; color: white; }
-#         .status-info { background: #3498db; color: white; }
-        
-#         .instructions {
-#             background: rgba(255,255,255,0.1);
-#             padding: 15px;
-#             border-radius: 8px;
-#             margin: 15px 0;
-#             font-size: 14px;
-#         }
-#     </style>
+# <title>Fishing Drone</title>
+# <meta name="viewport" content="width=device-width,initial-scale=1">
+# <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+# <style>
+# *{margin:0;padding:0;box-sizing:border-box}
+# body{font-family:Arial,sans-serif}
+# #map{height:70vh}
+# #panel{padding:20px;background:#2c3e50;color:white}
+# h1{font-size:24px;margin-bottom:15px}
+# .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:15px 0}
+# .stat{background:#34495e;padding:15px;border-radius:5px;text-align:center}
+# .stat-value{font-size:28px;font-weight:bold}
+# .stat-label{font-size:12px;opacity:0.8}
+# button{width:100%;padding:15px;margin:5px 0;border:none;border-radius:5px;font-size:16px;font-weight:bold;cursor:pointer}
+# .btn-success{background:#27ae60;color:white}
+# .btn-danger{background:#e74c3c;color:white}
+# #status{position:fixed;top:20px;right:20px;padding:15px 25px;border-radius:5px;display:none;z-index:9999}
+# .status-ok{background:#27ae60;color:white}
+# .status-err{background:#e74c3c;color:white}
+# </style>
 # </head>
 # <body>
-#     <div id="controls">
-#         <h1>🎣 Fishing Drone Mission Planner</h1>
-        
-#         <div class="instructions">
-#             <strong>Instructions:</strong> Click on the map to add drop locations. 
-#             Each click adds a waypoint where the drone will hover and deploy bait.
-#         </div>
-        
-#         <div class="stats">
-#             <div class="stat">
-#                 <div class="stat-label">Drop Locations</div>
-#                 <div class="stat-value" id="drop-count">0</div>
-#             </div>
-#             <div class="stat">
-#                 <div class="stat-label">Mission Status</div>
-#                 <div class="stat-value" id="mission-status">Ready</div>
-#             </div>
-#             <div class="stat">
-#                 <div class="stat-label">Distance</div>
-#                 <div class="stat-value" id="mission-distance">0m</div>
-#             </div>
-#         </div>
-        
-#         <div class="button-group">
-#             <button class="btn-danger" onclick="clearDrops()">🗑️ Clear All</button>
-#             <button class="btn-success" onclick="uploadToFC()">📡 Upload to FC</button>
-#             <button class="btn-warning" onclick="startMission()">🚀 Start Mission</button>
-#         </div>
-#     </div>
-    
-#     <div id="map"></div>
-#     <div id="status"></div>
-    
-#     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-#     <script>
-#         const map = L.map('map').setView([41.1413, -73.3579], 13);
-        
-#         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-#             attribution: '© OpenStreetMap contributors',
-#             maxZoom: 19
-#         }).addTo(map);
-        
-#         let drops = [];
-#         let markers = [];
-#         let polyline = null;
-        
-#         map.on('click', function(e) {
-#             addDrop(e.latlng.lat, e.latlng.lng);
-#         });
-        
-#         function addDrop(lat, lng) {
-#             const drop = { 
-#                 lat: lat, 
-#                 lon: lng, 
-#                 alt: 50,
-#                 id: Date.now()
-#             };
-#             drops.push(drop);
-            
-#             const marker = L.circleMarker([lat, lng], {
-#                 radius: 12,
-#                 fillColor: '#e74c3c',
-#                 color: 'white',
-#                 weight: 3,
-#                 fillOpacity: 0.9
-#             }).addTo(map);
-            
-#             marker.bindPopup(`
-#                 <b>Drop #${drops.length}</b><br>
-#                 Lat: ${lat.toFixed(6)}<br>
-#                 Lon: ${lng.toFixed(6)}<br>
-#                 Alt: 50m<br>
-#                 <button onclick="removeDropById(${drop.id})">Remove</button>
-#             `);
-            
-#             markers.push({ id: drop.id, marker: marker });
-            
-#             updatePath();
-#             updateStats();
-#         }
-        
-#         function removeDropById(id) {
-#             const index = drops.findIndex(d => d.id === id);
-#             if (index !== -1) {
-#                 drops.splice(index, 1);
-                
-#                 const markerObj = markers.find(m => m.id === id);
-#                 if (markerObj) {
-#                     map.removeLayer(markerObj.marker);
-#                 }
-                
-#                 markers = markers.filter(m => m.id !== id);
-#                 updatePath();
-#                 updateStats();
-#                 map.closePopup();
-#             }
-#         }
-        
-#         function clearDrops() {
-#             if (drops.length === 0) return;
-#             if (!confirm(`Clear all ${drops.length} drop locations?`)) return;
-            
-#             drops = [];
-#             markers.forEach(m => map.removeLayer(m.marker));
-#             markers = [];
-            
-#             if (polyline) {
-#                 map.removeLayer(polyline);
-#                 polyline = null;
-#             }
-            
-#             updateStats();
-#         }
-        
-#         function updatePath() {
-#             if (polyline) {
-#                 map.removeLayer(polyline);
-#             }
-            
-#             if (drops.length > 1) {
-#                 const latLngs = drops.map(d => [d.lat, d.lon]);
-#                 polyline = L.polyline(latLngs, {
-#                     color: '#3498db',
-#                     weight: 3,
-#                     opacity: 0.7,
-#                     dashArray: '10, 10'
-#                 }).addTo(map);
-#             }
-#         }
-        
-#         function updateStats() {
-#             document.getElementById('drop-count').textContent = drops.length;
-            
-#             if (drops.length > 1) {
-#                 let distance = 0;
-#                 for (let i = 0; i < drops.length - 1; i++) {
-#                     distance += calculateDistance(
-#                         drops[i].lat, drops[i].lon,
-#                         drops[i+1].lat, drops[i+1].lon
-#                     );
-#                 }
-#                 document.getElementById('mission-distance').textContent = 
-#                     Math.round(distance) + 'm';
-#             } else {
-#                 document.getElementById('mission-distance').textContent = '0m';
-#             }
-#         }
-        
-#         function calculateDistance(lat1, lon1, lat2, lon2) {
-#             const R = 6371000;
-#             const dLat = (lat2 - lat1) * Math.PI / 180;
-#             const dLon = (lon2 - lon1) * Math.PI / 180;
-#             const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-#                       Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-#                       Math.sin(dLon/2) * Math.sin(dLon/2);
-#             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-#             return R * c;
-#         }
-        
-#         async function uploadToFC() {
-#             if (drops.length === 0) {
-#                 showStatus('Add drop locations first!', 'error');
-#                 return;
-#             }
-            
-#             if (!confirm(`Upload ${drops.length} waypoints to flight controller?`)) {
-#                 return;
-#             }
-            
-#             showStatus('Uploading to FC...', 'info');
-            
-#             try {
-#                 const response = await fetch('/api/upload_mission', {
-#                     method: 'POST',
-#                     headers: { 'Content-Type': 'application/json' },
-#                     body: JSON.stringify({ drops: drops })
-#                 });
-                
-#                 const data = await response.json();
-                
-#                 if (data.success) {
-#                     showStatus(`✓ Uploaded ${drops.length} waypoints!`, 'success');
-#                     document.getElementById('mission-status').textContent = 'Uploaded';
-#                 } else {
-#                     showStatus('Upload failed: ' + data.error, 'error');
-#                 }
-#             } catch (error) {
-#                 showStatus('Connection error: ' + error.message, 'error');
-#             }
-#         }
-        
-#         async function startMission() {
-#             if (drops.length === 0) {
-#                 showStatus('Upload mission first!', 'error');
-#                 return;
-#             }
-            
-#             if (!confirm('Start autonomous mission?\n\nMake sure:\n- GPS lock acquired\n- Props installed\n- Area is clear')) {
-#                 return;
-#             }
-            
-#             try {
-#                 const response = await fetch('/api/start_mission', { 
-#                     method: 'POST' 
-#                 });
-#                 const data = await response.json();
-                
-#                 if (data.success) {
-#                     showStatus('✓ Mission started!', 'success');
-#                     document.getElementById('mission-status').textContent = 'Active';
-#                 } else {
-#                     showStatus('Failed to start mission', 'error');
-#                 }
-#             } catch (error) {
-#                 showStatus('Error: ' + error.message, 'error');
-#             }
-#         }
-        
-#         function showStatus(message, type) {
-#             const status = document.getElementById('status');
-#             status.textContent = message;
-#             status.className = 'status-' + type;
-#             status.style.display = 'block';
-            
-#             setTimeout(() => {
-#                 status.style.display = 'none';
-#             }, 5000);
-#         }
-        
-#         // Update status periodically
-#         setInterval(async () => {
-#             try {
-#                 const response = await fetch('/api/status');
-#                 const data = await response.json();
-#                 document.getElementById('mission-status').textContent = 
-#                     data.status.charAt(0).toUpperCase() + data.status.slice(1);
-#             } catch (error) {
-#                 // Silently fail
-#             }
-#         }, 2000);
-#     </script>
+# <div id="panel">
+# <h1>🎣 Fishing Drone</h1>
+# <p style="margin:10px 0">Click map to add drop locations</p>
+# <div class="stats">
+# <div class="stat"><div class="stat-value" id="count">0</div><div class="stat-label">Drops</div></div>
+# <div class="stat"><div class="stat-value" id="status-text">Ready</div><div class="stat-label">Status</div></div>
+# </div>
+# <button class="btn-danger" onclick="clear()">Clear All</button>
+# <button class="btn-success" onclick="upload()">Upload to Drone</button>
+# </div>
+# <div id="map"></div>
+# <div id="status"></div>
+# <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+# <script>
+# const map=L.map('map').setView([41.1413,-73.3579],13);
+# L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+# let drops=[],markers=[];
+# map.on('click',e=>{
+# drops.push({lat:e.latlng.lat,lon:e.latlng.lng,alt:50});
+# const m=L.circleMarker([e.latlng.lat,e.latlng.lng],{radius:10,fillColor:'#e74c3c',color:'white',weight:3,fillOpacity:0.9}).addTo(map);
+# m.bindPopup(`Drop ${drops.length}<br>${e.latlng.lat.toFixed(6)},${e.latlng.lng.toFixed(6)}`);
+# markers.push(m);
+# document.getElementById('count').textContent=drops.length;
+# });
+# function clear(){
+# if(!confirm('Clear all drops?'))return;
+# drops=[];
+# markers.forEach(m=>map.removeLayer(m));
+# markers=[];
+# document.getElementById('count').textContent=0;
+# }
+# async function upload(){
+# if(drops.length===0){
+# show('Add drops first!','err');
+# return;
+# }
+# if(!confirm(`Upload ${drops.length} waypoints?`))return;
+# show('Uploading...','ok');
+# try{
+# const r=await fetch('/api/upload',{
+# method:'POST',
+# headers:{'Content-Type':'application/json'},
+# body:JSON.stringify({drops})
+# });
+# const d=await r.json();
+# if(d.success){
+# show(`✓ Uploaded ${drops.length} waypoints!`,'ok');
+# document.getElementById('status-text').textContent='Uploaded';
+# }else{
+# show('Failed: '+d.error,'err');
+# }
+# }catch(e){
+# show('Error: '+e.message,'err');
+# }
+# }
+# function show(msg,type){
+# const s=document.getElementById('status');
+# s.textContent=msg;
+# s.className='status-'+type;
+# s.style.display='block';
+# setTimeout(()=>s.style.display='none',5000);
+# }
+# </script>
 # </body>
 # </html>"""
         
-#         response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len(html)}\r\n\r\n{html}"
-#         client_socket.send(response.encode())
+#         resp = f"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n{html}"
+#         client.send(resp.encode())
     
-#     def api_status(self, client_socket):
-#         """Return drone status"""
-#         data = json.dumps({
-#             'status': self.current_mission['status'],
-#             'drops': len(self.current_mission['drops']),
-#             'battery': 23.5,
-#             'gps_sats': 8
-#         })
-        
-#         response = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{data}"
-#         client_socket.send(response.encode())
-    
-#     def api_upload_mission(self, client_socket, body):
-#         """Upload mission to FC via MSP"""
+#     def _api_upload(self, client, body):
+#         """Handle mission upload"""
 #         try:
 #             data = json.loads(body)
 #             drops = data.get('drops', [])
             
-#             print(f"\nReceived mission upload request: {len(drops)} waypoints")
-            
-#             # Upload to INAV via MSP
-#             success = self.msp.upload_waypoint_mission(drops)
+#             success = self.msp.upload_mission(drops)
             
 #             if success:
-#                 self.current_mission['drops'] = drops
-#                 self.current_mission['status'] = 'uploaded'
-                
-#                 response_data = json.dumps({
-#                     'success': True, 
-#                     'count': len(drops)
-#                 })
+#                 self.mission['drops'] = drops
+#                 self.mission['status'] = 'uploaded'
+#                 resp_data = json.dumps({'success': True, 'count': len(drops)})
 #             else:
-#                 response_data = json.dumps({
-#                     'success': False, 
-#                     'error': 'MSP upload failed'
-#                 })
+#                 resp_data = json.dumps({'success': False, 'error': 'Upload failed'})
             
-#             response = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{response_data}"
-#             client_socket.send(response.encode())
+#             resp = f"HTTP/1.1 200 OK\r\nContent-Type:application/json\r\n\r\n{resp_data}"
+#             client.send(resp.encode())
             
 #         except Exception as e:
-#             print(f"Error in api_upload_mission: {e}")
-#             error_data = json.dumps({'success': False, 'error': str(e)})
-#             response = f"HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n{error_data}"
-#             client_socket.send(response.encode())
+#             err = json.dumps({'success': False, 'error': str(e)})
+#             resp = f"HTTP/1.1 500 Error\r\nContent-Type:application/json\r\n\r\n{err}"
+#             client.send(resp.encode())
     
-#     def api_start_mission(self, client_socket):
-#         """Start mission execution"""
-#         self.current_mission['status'] = 'active'
-        
-#         # Mission start is handled by switching FC to waypoint mode
-#         # This is done via SBUS AUX channel in the main loop
-        
-#         data = json.dumps({'success': True})
-#         response = f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{data}"
-#         client_socket.send(response.encode())
-        
-#         print("\n🚀 Mission START requested")
-    
-#     def send_404(self, client_socket):
-#         response = "HTTP/1.1 404 Not Found\r\n\r\n404 Not Found"
-#         client_socket.send(response.encode())
+#     def _api_status(self, client):
+#         """Return status"""
+#         data = json.dumps({
+#             'status': self.mission['status'],
+#             'drops': len(self.mission['drops'])
+#         })
+#         resp = f"HTTP/1.1 200 OK\r\nContent-Type:application/json\r\n\r\n{data}"
+#         client.send(resp.encode())
 
 # # ============================================
-# # Global State (shared between threads)
+# # GLOBAL STATE
 # # ============================================
-# collision_imminent = False
-# collision_direction = "front"
-# collision_velocity = None
-# mission_active = False
+
+# collision = False
+# collision_dir = "front"
 
 # # ============================================
-# # Thread 1: SBUS Flight Control (70Hz)
+# # THREAD: SBUS CONTROL (70Hz)
 # # ============================================
-# def sbus_control_loop():
-#     """
-#     SBUS control thread
-#     Normally passes through to INAV
-#     Overrides only during collision avoidance
-#     """
-#     global collision_imminent, collision_direction, collision_velocity
-#     global mission_active
+
+# def sbus_thread():
+#     """SBUS control loop"""
+#     global collision, collision_dir
     
-#     print("Starting SBUS control loop...")
-    
-#     sbus = SBUSTransmitter(SBUS_TX_PIN)
+#     sbus = SBUS(Pins.SBUS_TX)
     
 #     # Initialize channels
-#     sbus.set_channel(0, 992)   # Roll center
-#     sbus.set_channel(1, 992)   # Pitch center
-#     sbus.set_channel(2, 992)   # Throttle center
-#     sbus.set_channel(3, 992)   # Yaw center
-#     sbus.set_channel(4, 1811)  # AUX1 - GPS/Waypoint mode
+#     sbus.set(0, 992)  # Roll
+#     sbus.set(1, 992)  # Pitch
+#     sbus.set(2, 992)  # Throttle
+#     sbus.set(3, 992)  # Yaw
+#     sbus.set(4, 1811)  # AUX1 = GPS mode
     
-#     last_collision_time = 0
-    
-#     print("SBUS control ready\n")
+#     print("SBUS control started")
     
 #     while True:
-#         if collision_imminent:
-#             # EMERGENCY COLLISION AVOIDANCE
-#             if collision_velocity == "critical":
-#                 intensity = 400
-#             elif collision_velocity == "fast":
-#                 intensity = 300
-#             elif collision_velocity == "medium":
-#                 intensity = 200
+#         if collision:
+#             # Override for collision avoidance
+#             intensity = 350
+            
+#             if collision_dir == "left":
+#                 sbus.set(0, 992 + intensity)  # Roll right
+#             elif collision_dir == "right":
+#                 sbus.set(0, 992 - intensity)  # Roll left
 #             else:
-#                 intensity = 150
+#                 sbus.set(1, 992 - intensity)  # Pitch back
             
-#             # Apply evasive maneuver
-#             if collision_direction == "right":
-#                 sbus.set_channel(0, 992 - intensity)  # Roll left
-#             elif collision_direction == "left":
-#                 sbus.set_channel(0, 992 + intensity)  # Roll right
-#             elif collision_direction == "above":
-#                 sbus.set_channel(2, 992 - intensity)  # Descend
-#             elif collision_direction == "below":
-#                 sbus.set_channel(2, 992 + intensity)  # Climb
-#             else:  # front
-#                 sbus.set_channel(1, 992 - intensity)  # Pitch back
-            
-#             sbus.set_channel(4, 172)  # Switch to Stabilize (AI control)
-#             last_collision_time = time.monotonic()
-        
+#             sbus.set(4, 172)  # Stabilize mode
 #         else:
-#             # Return to INAV control after collision cleared
-#             if time.monotonic() - last_collision_time > 2.0:
-#                 sbus.set_channel(0, 992)
-#                 sbus.set_channel(1, 992)
-#                 sbus.set_channel(2, 992)
-                
-#                 # Choose flight mode based on mission status
-#                 if mission_active:
-#                     sbus.set_channel(4, 1811)  # GPS/Waypoint mode
-#                 else:
-#                     sbus.set_channel(4, 992)   # Stabilize/Manual
+#             # Normal - let INAV control
+#             sbus.set(0, 992)
+#             sbus.set(1, 992)
+#             sbus.set(4, 1811)  # GPS mode
         
-#         sbus.send_packet()
-#         time.sleep(0.014)  # 70Hz
+#         sbus.send()
+#         time.sleep(0.014)
 
 # # ============================================
-# # Thread 2: Vision Processing (60fps target)
+# # THREAD: VISION (30fps)
 # # ============================================
-# def vision_processing_loop():
-#     """
-#     Vision processing thread
-#     Monitors camera for obstacles
-#     Sets global collision flags
-#     """
-#     global collision_imminent, collision_direction, collision_velocity
+
+# def vision_thread():
+#     """Vision processing loop"""
+#     global collision, collision_dir
     
 #     print("Initializing camera...")
     
 #     try:
 #         cam = espcamera.Camera(
-#             data_pins=CAMERA_PINS['data'],
-#             external_clock_pin=CAMERA_PINS['xclk'],
-#             pixel_clock_pin=CAMERA_PINS['pclk'],
-#             vsync_pin=CAMERA_PINS['vsync'],
-#             href_pin=CAMERA_PINS['href'],
-#             i2c=busio.I2C(scl=CAMERA_PINS['scl'], sda=CAMERA_PINS['sda']),
-#             powerdown_pin=CAMERA_PINS['pwdn'],
-#             reset_pin=CAMERA_PINS['reset'],
+#             data_pins=[Pins.CAM_D0, Pins.CAM_D1, Pins.CAM_D2, Pins.CAM_D3,
+#                       Pins.CAM_D4, Pins.CAM_D5, Pins.CAM_D6, Pins.CAM_D7],
+#             external_clock_pin=Pins.CAM_XCLK,
+#             pixel_clock_pin=Pins.CAM_PCLK,
+#             vsync_pin=Pins.CAM_VSYNC,
+#             href_pin=Pins.CAM_HREF,
+#             i2c=busio.I2C(scl=Pins.CAM_SCL, sda=Pins.CAM_SDA),
+#             powerdown_pin=Pins.CAM_PWDN,
+#             reset_pin=Pins.CAM_RESET,
 #             external_clock_frequency=20_000_000,
 #             framebuffer_count=2,
 #             grab_mode=espcamera.GrabMode.WHEN_EMPTY
 #         )
         
 #         cam.pixel_format = espcamera.PixelFormat.RGB565
-#         cam.frame_size = espcamera.FrameSize.QQVGA  # 160x120 for speed
+#         cam.frame_size = espcamera.FrameSize.QQVGA
         
-#         print("✓ Camera initialized\n")
+#         print("✓ Camera ready")
         
 #     except Exception as e:
-#         print(f"✗ Camera initialization failed: {e}")
-#         print("Vision processing disabled\n")
+#         print(f"✗ Camera failed: {e}")
 #         return
     
-#     detector = TwoStageCollisionDetector(cam)
+#     detector = CollisionDetector(cam)
     
-#     frame_count = 0
-#     start_time = time.monotonic()
-    
-#     print("Vision processing ready\n")
+#     print("Vision processing started")
     
 #     while True:
-#         try:
-#             collision, direction, velocity = detector.detect_collision()
-            
-#             collision_imminent = collision
-            
-#             if collision:
-#                 collision_direction = direction
-#                 collision_velocity = velocity
-#                 print(f"🚨 COLLISION WARNING: {direction} | Velocity: {velocity}")
-            
-#             # FPS tracking
-#             frame_count += 1
-#             if frame_count % 300 == 0:  # Every 5 seconds at 60fps
-#                 elapsed = time.monotonic() - start_time
-#                 fps = frame_count / elapsed
-#                 print(f"Vision FPS: {fps:.1f}")
+#         hit, direction, severity = detector.detect()
         
-#         except Exception as e:
-#             print(f"Vision error: {e}")
-#             time.sleep(0.1)
+#         collision = hit
+#         if hit:
+#             collision_dir = direction
+#             print(f"⚠️ COLLISION: {direction} ({severity})")
+        
+#         time.sleep(0.033)
 
 # # ============================================
-# # Thread 3: WiFi Web Server
+# # MAIN
 # # ============================================
-# def web_server_loop(msp_controller):
-#     """
-#     Web server thread
-#     Hosts mission planning interface
-#     """
-#     server = DroneWebServer(msp_controller)
-#     server.start()
 
-# # ============================================
-# # MAIN PROGRAM
-# # ============================================
 # def main():
 #     """Main entry point"""
     
-#     # LED for status
-#     led = digitalio.DigitalInOut(board.LED)
+#     # Status LED
+#     led = digitalio.DigitalInOut(Pins.LED)
 #     led.direction = digitalio.Direction.OUTPUT
 #     led.value = True
     
 #     print("\n" + "="*60)
-#     print("  FISHING DRONE - AUTONOMOUS SYSTEM")
-#     print("="*60)
-#     print(f"  Firmware: v1.0")
-#     print(f"  Board: ESP32-S3 Feather")
+#     print("FISHING DRONE - AUTONOMOUS SYSTEM")
 #     print("="*60 + "\n")
     
-#     # Initialize MSP connection to FC
-#     print("Initializing MSP connection to flight controller...")
+#     # Initialize MSP
+#     print("Initializing MSP...")
 #     try:
 #         msp_uart = busio.UART(
-#             tx=MSP_TX_PIN,
-#             rx=MSP_RX_PIN,
+#             tx=Pins.MSP_TX,
+#             rx=Pins.MSP_RX,
 #             baudrate=115200,
 #             timeout=0.1
 #         )
-#         msp = MSPController(msp_uart)
-#         print("✓ MSP initialized\n")
+#         msp = MSP(msp_uart)
+#         print("✓ MSP ready\n")
 #     except Exception as e:
-#         print(f"✗ MSP initialization failed: {e}\n")
-#         msp = None
+#         print(f"✗ MSP failed: {e}\n")
+#         return
     
 #     # Start threads
-#     print("Starting system threads...\n")
-    
-#     # Thread 1: SBUS Control
-#     _thread.start_new_thread(sbus_control_loop, ())
+#     print("Starting threads...")
+#     _thread.start_new_thread(sbus_thread, ())
+#     time.sleep(0.5)
+#     _thread.start_new_thread(vision_thread, ())
 #     time.sleep(0.5)
     
-#     # Thread 2: Vision Processing
-#     _thread.start_new_thread(vision_processing_loop, ())
-#     time.sleep(0.5)
-    
-#     # Thread 3: Web Server (runs on main thread)
-#     if msp:
-#         web_server_loop(msp)
-#     else:
-#         print("MSP not available - web server disabled")
-#         print("Running in collision avoidance only mode\n")
-#         while True:
-#             led.value = not led.value
-#             time.sleep(1)
+#     # Run web server on main thread
+#     server = WebServer(msp)
+#     server.start()
 
-# # Run main program
-# if __name__ == "__main__":
-#     main()
-
+# # Run
+# main()
 
 
 """
-Fishing Drone Autonomous System
-ESP32-S3 Feather with Camera + INAV Integration
+Fishing Drone - Xiao ESP32S3 Sense
+Backup GPS + Drop Trigger + Collision Avoidance
 """
 
 import board
 import busio
-import wifi
-import socketpool
-import json
-import time
-import espcamera
-import _thread
-import struct
 import digitalio
+import pwmio
+import time
+import json
+import math
+import espcamera
+from adafruit_gps import GPS
+from adafruit_motor import servo
+
+print("\n" + "="*50)
+print("🎣 FISHING DRONE - BACKUP SYSTEM")
+print("="*50 + "\n")
 
 # ============================================
 # CONFIGURATION
 # ============================================
 
-# WiFi credentials
-WIFI_SSID = "FishingDrone"
-WIFI_PASSWORD = "fishing123"
-
-# Pin assignments
-class Pins:
-    # SBUS output to FC
-    SBUS_TX = board.IO17
+class Config:
+    # Pins
+    GPS_RX = board.IO1      # GPS TX → Xiao RX
+    GPS_TX = board.IO2      # GPS RX → Xiao TX
+    FC_TX = board.IO3       # → FC Serial (override/telemetry)
+    SERVO_PIN = board.IO4   # → Servo signal
     
-    # MSP serial to FC
-    MSP_TX = board.IO2
-    MSP_RX = board.IO4
+    # Drop detection
+    WAYPOINT_RADIUS = 3.0   # meters - trigger radius
+    DROP_COOLDOWN = 30.0    # seconds - min time between drops
     
-    # Camera pins
-    CAM_D0 = board.IO0
-    CAM_D1 = board.IO12
-    CAM_D2 = board.IO37
-    CAM_D3 = board.IO35
-    CAM_D4 = board.IO14
-    CAM_D5 = board.IO18
-    CAM_D6 = board.IO11
-    CAM_D7 = board.IO33
-    CAM_XCLK = board.IO38
-    CAM_PCLK = board.IO1
-    CAM_VSYNC = board.IO3
-    CAM_HREF = board.IO7
-    CAM_SDA = board.IO8
-    CAM_SCL = board.IO9
-    CAM_PWDN = board.IO43
-    CAM_RESET = board.IO44
+    # Servo timing
+    SERVO_RELEASE_ANGLE = 90
+    SERVO_RESET_ANGLE = 0
+    SERVO_RELEASE_TIME = 1.0  # seconds
     
-    # Status LED
-    LED = board.LED
+    # Collision avoidance
+    COLLISION_THRESHOLD = 800
+    COLLISION_OVERRIDE_TIME = 3.0  # seconds to hold override
+    
+    # RC Override values (if needed)
+    RC_CENTER = 1500
+    RC_STOP = 1500
 
 # ============================================
-# MSP PROTOCOL CLASS
+# DROP MANAGER
 # ============================================
 
-class MSP:
-    """MSP protocol for INAV communication"""
+class DropManager:
+    """Manages drop locations and triggers"""
     
-    # Command IDs
-    MSP_SET_WP = 209
-    MSP_WP_MISSION_SAVE = 46
-    
-    def __init__(self, uart):
-        self.uart = uart
-    
-    def _checksum(self, data):
-        """Calculate XOR checksum"""
-        csum = len(data)
-        for byte in data:
-            csum ^= byte
-        return csum
-    
-    def send_command(self, cmd, payload=b''):
-        """Send MSP command"""
-        packet = bytearray([ord('$'), ord('M'), ord('<')])
-        packet.append(len(payload))
-        packet.append(cmd)
-        packet.extend(payload)
-        packet.append(self._checksum(payload) ^ cmd)
+    def __init__(self):
+        self.drops = []
+        self.dropped_indices = set()  # Track completed drops
+        self.last_drop_time = 0
         
-        self.uart.write(packet)
+        self._load_drops()
     
-    def set_waypoint(self, number, lat, lon, alt, action=2):
+    def _load_drops(self):
+        """Load drop locations from JSON"""
+        try:
+            with open('/drops.json', 'r') as f:
+                data = json.load(f)
+                self.drops = data['drops']
+                
+                # Load settings
+                settings = data.get('settings', {})
+                Config.WAYPOINT_RADIUS = settings.get('waypoint_radius', 3.0)
+                Config.SERVO_RELEASE_ANGLE = settings.get('servo_release_angle', 90)
+                Config.SERVO_RESET_ANGLE = settings.get('servo_reset_angle', 0)
+                Config.COLLISION_THRESHOLD = settings.get('collision_threshold', 800)
+                
+                print(f"✓ Loaded {len(self.drops)} drop points:")
+                for i, drop in enumerate(self.drops):
+                    print(f"  {i+1}. {drop['name']}: {drop['lat']:.6f}, {drop['lon']:.6f}")
+                print()
+                
+        except Exception as e:
+            print(f"✗ Failed to load drops.json: {e}\n")
+            self.drops = []
+    
+    def check_position(self, current_lat, current_lon):
         """
-        Upload waypoint to INAV
-        action: 1=Waypoint, 2=PosHold, 3=RTH
+        Check if at any drop point
+        Returns: (should_drop, drop_index, distance) or (False, None, None)
         """
-        payload = struct.pack(
-            '<BB iii hhh B',
-            number,          # WP number
-            action,          # Action type
-            int(lat * 1e7),  # Latitude
-            int(lon * 1e7),  # Longitude
-            int(alt * 100),  # Altitude (cm)
-            0, 0, 0,        # Parameters
-            0               # Flag
-        )
+        # Cooldown check
+        if time.monotonic() - self.last_drop_time < Config.DROP_COOLDOWN:
+            return False, None, None
         
-        self.send_command(self.MSP_SET_WP, payload)
-        time.sleep(0.05)
-    
-    def save_mission(self):
-        """Save mission to FC EEPROM"""
-        self.send_command(self.MSP_WP_MISSION_SAVE)
-        time.sleep(0.5)
-    
-    def upload_mission(self, drops):
-        """Upload complete mission"""
-        print(f"Uploading {len(drops)} waypoints to INAV...")
-        
-        # Waypoint 0: Home/RTH
-        self.set_waypoint(0, 0, 0, 0, action=1)
-        
-        # Upload drops
-        for i, drop in enumerate(drops):
-            wp_num = i + 1
-            self.set_waypoint(
-                wp_num,
-                drop['lat'],
-                drop['lon'],
-                drop.get('alt', 50),
-                action=2  # Position hold
+        # Check each drop point
+        for i, drop in enumerate(self.drops):
+            # Skip if already dropped here
+            if i in self.dropped_indices:
+                continue
+            
+            # Calculate distance
+            distance = self._haversine(
+                current_lat, current_lon,
+                drop['lat'], drop['lon']
             )
-            print(f"  WP{wp_num}: {drop['lat']:.6f}, {drop['lon']:.6f}")
+            
+            # Within trigger radius?
+            if distance <= Config.WAYPOINT_RADIUS:
+                return True, i, distance
         
-        # Save to FC
-        self.save_mission()
-        print("✓ Mission uploaded!")
-        return True
+        return False, None, None
+    
+    def mark_dropped(self, index):
+        """Mark drop as completed"""
+        self.dropped_indices.add(index)
+        self.last_drop_time = time.monotonic()
+        
+        remaining = len(self.drops) - len(self.dropped_indices)
+        print(f"✓ Drop complete! ({remaining} remaining)")
+    
+    def get_nearest_drop(self, current_lat, current_lon):
+        """Get nearest undropped location and distance"""
+        nearest_idx = None
+        nearest_dist = float('inf')
+        
+        for i, drop in enumerate(self.drops):
+            if i in self.dropped_indices:
+                continue
+            
+            dist = self._haversine(
+                current_lat, current_lon,
+                drop['lat'], drop['lon']
+            )
+            
+            if dist < nearest_dist:
+                nearest_dist = dist
+                nearest_idx = i
+        
+        if nearest_idx is not None:
+            return self.drops[nearest_idx], nearest_dist
+        
+        return None, None
+    
+    def all_complete(self):
+        """Check if all drops completed"""
+        return len(self.dropped_indices) >= len(self.drops)
+    
+    def _haversine(self, lat1, lon1, lat2, lon2):
+        """Calculate distance in meters"""
+        R = 6371000  # Earth radius in meters
+        
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(dlat/2) ** 2 + 
+             math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        
+        return R * c
 
 # ============================================
-# SBUS PROTOCOL CLASS
+# BAIT RELEASE
 # ============================================
 
-class SBUS:
-    """SBUS protocol for RC control"""
+class BaitReleaser:
+    """Controls servo for bait release"""
     
-    def __init__(self, tx_pin):
-        self.uart = busio.UART(
-            tx=tx_pin,
-            rx=None,
-            baudrate=100000,
-            bits=8,
-            parity=busio.UART.Parity.EVEN,
-            stop=2,
-            timeout=0
-        )
-        self.channels = [992] * 16
+    def __init__(self, servo_pin):
+        print("Initializing servo...")
+        pwm = pwmio.PWMOut(servo_pin, frequency=50)
+        self.servo = servo.Servo(pwm, min_pulse=500, max_pulse=2500)
+        self.reset()
+        print("✓ Servo ready\n")
     
-    def set(self, channel, value):
-        """Set channel (0-15) to value (172-1811)"""
-        if 0 <= channel < 16:
-            self.channels[channel] = max(172, min(1811, value))
+    def release(self):
+        """Release bait"""
+        print("  🎣 RELEASING BAIT...")
+        self.servo.angle = Config.SERVO_RELEASE_ANGLE
+        time.sleep(Config.SERVO_RELEASE_TIME)
+        print("  ✓ Bait released")
     
-    def send(self):
-        """Send SBUS packet"""
-        # Pack 16 channels (11 bits each)
-        bits = 0
-        for i, ch in enumerate(self.channels):
-            bits |= (ch & 0x7FF) << (i * 11)
-        
-        # Build packet
-        packet = bytearray(25)
-        packet[0] = 0x0F  # Header
-        
-        for i in range(22):
-            packet[i + 1] = (bits >> (i * 8)) & 0xFF
-        
-        packet[23] = 0x00  # Flags
-        packet[24] = 0x00  # Footer
-        
-        self.uart.write(bytes(packet))
+    def reset(self):
+        """Reset servo to closed position"""
+        self.servo.angle = Config.SERVO_RESET_ANGLE
+        time.sleep(0.5)
 
 # ============================================
-# COLLISION DETECTOR CLASS
+# COLLISION DETECTOR
 # ============================================
 
 class CollisionDetector:
-    """Fast two-stage collision detection"""
+    """Camera-based obstacle detection"""
     
-    def __init__(self, camera):
-        self.cam = camera
-        self.prev_gray = None
-        self.edge_threshold = 800
+    def __init__(self):
+        print("Initializing camera...")
+        try:
+            self.cam = espcamera.Camera()
+            self.cam.pixel_format = espcamera.PixelFormat.RGB565
+            self.cam.frame_size = espcamera.FrameSize.QQVGA
+            print("✓ Camera ready\n")
+            self.enabled = True
+        except Exception as e:
+            print(f"⚠️  Camera failed: {e}")
+            print("   Collision detection disabled\n")
+            self.cam = None
+            self.enabled = False
     
     def detect(self):
-        """Returns (collision, direction, severity)"""
-        frame = self.cam.take(1)
-        if not frame:
-            return False, None, None
+        """
+        Check for obstacles
+        Returns: (collision_detected, direction)
+        """
+        if not self.enabled or not self.cam:
+            return False, None
         
-        # Stage 1: Fast edge detection
-        edges = self._count_edges(frame)
-        
-        if edges < self.edge_threshold:
-            return False, None, None
-        
-        # Stage 2: Analyze direction
-        gray = self._to_gray(frame)
-        direction = self._find_direction(gray)
-        severity = "high" if edges > 1500 else "medium"
-        
-        self.prev_gray = gray
-        return True, direction, severity
+        try:
+            frame = self.cam.take(1)
+            if not frame:
+                return False, None
+            
+            edges = self._count_edges(frame)
+            
+            if edges > Config.COLLISION_THRESHOLD:
+                direction = self._find_direction(frame)
+                return True, direction
+            
+            return False, None
+            
+        except Exception as e:
+            print(f"Camera error: {e}")
+            return False, None
     
     def _count_edges(self, frame):
-        """Stage 1: Count edges in center"""
+        """Count edges in center region"""
         count = 0
         w, h = 160, 120
         
+        # Check center region only
         for y in range(h//4, 3*h//4, 2):
             for x in range(w//4, 3*w//4, 2):
                 idx = (y * w + x) * 2
                 if idx + w*2 < len(frame):
                     r1 = frame[idx] >> 3
                     r2 = frame[idx + 2] >> 3
-                    r3 = frame[idx + w*2] >> 3
                     
-                    if abs(r1 - r2) > 3 or abs(r1 - r3) > 3:
+                    if abs(r1 - r2) > 3:
                         count += 1
         
         return count
     
-    def _to_gray(self, frame):
-        """Convert RGB565 to grayscale"""
-        gray = bytearray(len(frame) // 2)
-        for i in range(0, len(frame), 2):
-            r = (frame[i] >> 3) & 0x1F
-            g = ((frame[i] & 0x07) << 3) | ((frame[i+1] >> 5) & 0x07)
-            b = frame[i+1] & 0x1F
-            gray[i//2] = (r * 19 + g * 38 + b * 7) >> 6
-        return gray
-    
-    def _find_direction(self, gray):
-        """Stage 2: Find obstacle direction"""
-        w, h = 160, 120
+    def _find_direction(self, frame):
+        """Determine obstacle direction"""
+        w = 160
         left = center = right = 0
         
-        for y in range(h-1):
-            for x in range(w-1):
-                idx = y * w + x
-                if idx + w < len(gray):
-                    edge = abs(gray[idx] - gray[idx+1]) + abs(gray[idx] - gray[idx+w])
-                    
-                    if edge > 20:
-                        if x < w//3:
-                            left += edge
-                        elif x > 2*w//3:
-                            right += edge
-                        else:
-                            center += edge
+        for y in range(40, 80, 2):
+            for x in range(0, w-1, 2):
+                idx = (y * w + x) * 2
+                r1 = frame[idx] >> 3
+                r2 = frame[idx + 2] >> 3
+                edge = abs(r1 - r2)
+                
+                if edge > 3:
+                    if x < w//3:
+                        left += edge
+                    elif x > 2*w//3:
+                        right += edge
+                    else:
+                        center += edge
         
         max_val = max(left, center, right)
         if max_val == left:
             return "left"
         elif max_val == right:
             return "right"
-        else:
-            return "front"
+        return "front"
 
 # ============================================
-# WEB SERVER CLASS
+# FC OVERRIDE
 # ============================================
 
-class WebServer:
-    """WiFi web server for mission planning"""
+class FCController:
+    """Send override commands to flight controller"""
     
-    def __init__(self, msp):
-        self.msp = msp
-        self.mission = {'drops': [], 'status': 'idle'}
+    def __init__(self, uart):
+        self.uart = uart
+        self.override_active = False
+        self.override_start = 0
     
-    def start(self):
-        """Start WiFi AP and HTTP server"""
-        print("\n" + "="*60)
-        print("Starting WiFi Access Point...")
+    def send_stop(self):
+        """Send stop/hover command"""
+        # Simple protocol - adjust for your FC
+        cmd = f"STOP\n"
+        self.uart.write(cmd.encode())
         
-        wifi.radio.start_ap(WIFI_SSID, WIFI_PASSWORD)
+        if not self.override_active:
+            print("  → Sending STOP to FC")
+            self.override_active = True
+            self.override_start = time.monotonic()
+    
+    def release_override(self):
+        """Release control back to FC"""
+        if self.override_active:
+            # Check if override time elapsed
+            if time.monotonic() - self.override_start > Config.COLLISION_OVERRIDE_TIME:
+                cmd = f"RESUME\n"
+                self.uart.write(cmd.encode())
+                print("  ← Returning control to FC")
+                self.override_active = False
+    
+    def is_overriding(self):
+        """Check if currently overriding FC"""
+        return self.override_active
+
+# ============================================
+# MAIN CONTROLLER
+# ============================================
+
+class BackupController:
+    """
+    Backup system that monitors position and triggers drops
+    Primary navigation is handled by FC
+    """
+    
+    def __init__(self):
+        print("Initializing backup systems...\n")
         
-        print(f"✓ SSID: {WIFI_SSID}")
-        print(f"✓ Password: {WIFI_PASSWORD}")
-        print(f"✓ IP: {wifi.radio.ipv4_address_ap}")
-        print(f"✓ URL: http://{wifi.radio.ipv4_address_ap}")
-        print("="*60 + "\n")
+        # GPS
+        print("1. GPS:")
+        gps_uart = busio.UART(
+            tx=Config.GPS_TX,
+            rx=Config.GPS_RX,
+            baudrate=9600,
+            timeout=10
+        )
+        self.gps = GPS(gps_uart, debug=False)
+        self.gps.send_command(b'PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0')
+        self.gps.send_command(b'PMTK220,1000')  # 1Hz
+        print("  ✓ GPS initialized\n")
         
-        pool = socketpool.SocketPool(wifi.radio)
-        server = pool.socket(pool.AF_INET, pool.SOCK_STREAM)
-        server.bind(('0.0.0.0', 80))
-        server.listen(1)
-        server.settimeout(1.0)
+        # Drop manager
+        print("2. Drop Points:")
+        self.drop_mgr = DropManager()
+        
+        # Servo
+        print("3. Servo:")
+        self.servo = BaitReleaser(Config.SERVO_PIN)
+        
+        # Camera
+        print("4. Camera:")
+        self.collision = CollisionDetector()
+        
+        # FC controller
+        print("5. FC Interface:")
+        fc_uart = busio.UART(
+            tx=Config.FC_TX,
+            rx=None,
+            baudrate=115200,
+            timeout=0
+        )
+        self.fc = FCController(fc_uart)
+        print("  ✓ FC serial ready\n")
+        
+        # Status LED
+        self.led = digitalio.DigitalInOut(board.LED)
+        self.led.direction = digitalio.Direction.OUTPUT
+    
+    def wait_for_gps(self):
+        """Wait for GPS fix"""
+        print("Waiting for GPS fix...")
+        
+        timeout = 60  # 60 seconds
+        start = time.monotonic()
+        
+        while not self.gps.has_fix:
+            self.gps.update()
+            
+            # Blink LED
+            self.led.value = not self.led.value
+            
+            # Timeout check
+            if time.monotonic() - start > timeout:
+                print("✗ GPS timeout!")
+                return False
+            
+            print(".", end="")
+            time.sleep(1)
+        
+        print("\n✓ GPS fix acquired!")
+        print(f"  Position: {self.gps.latitude:.6f}, {self.gps.longitude:.6f}")
+        print(f"  Altitude: {self.gps.altitude_m or 0:.1f}m")
+        print(f"  Satellites: {self.gps.satellites}\n")
+        
+        self.led.value = True
+        return True
+    
+    def run(self):
+        """Main monitoring loop"""
+        print("="*50)
+        print("BACKUP SYSTEM ACTIVE")
+        print("FC handles navigation, Xiao triggers drops")
+        print("="*50 + "\n")
+        
+        # Wait for GPS
+        if not self.wait_for_gps():
+            print("Cannot run without GPS!")
+            return
+        
+        if len(self.drop_mgr.drops) == 0:
+            print("⚠️  No drops loaded - monitoring only")
+        
+        print("Monitoring started...\n")
+        
+        last_status = time.monotonic()
         
         while True:
-            try:
-                client, addr = server.accept()
-                self._handle(client)
-            except OSError:
-                pass
-            time.sleep(0.01)
-    
-    def _handle(self, client):
-        """Handle HTTP request"""
-        try:
-            request = client.recv(4096).decode('utf-8')
-            if not request:
-                return
+            # Update GPS
+            self.gps.update()
             
-            lines = request.split('\r\n')
-            if len(lines) == 0:
-                return
+            # Check GPS fix
+            if not self.gps.has_fix:
+                print("⚠️  GPS fix lost!")
+                time.sleep(1)
+                continue
             
-            parts = lines[0].split(' ')
-            if len(parts) < 2:
-                return
+            # Get current position
+            current_lat = self.gps.latitude
+            current_lon = self.gps.longitude
             
-            method, path = parts[0], parts[1]
+            # Check for collision
+            collision, direction = self.collision.detect()
             
-            if path == '/':
-                self._serve_html(client)
-            elif path == '/api/upload':
-                body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
-                self._api_upload(client, body)
-            elif path == '/api/status':
-                self._api_status(client)
+            if collision:
+                print(f"⚠️  OBSTACLE DETECTED: {direction.upper()}!")
+                self.fc.send_stop()
+                time.sleep(0.1)
+                continue
             else:
-                client.send(b'HTTP/1.1 404 Not Found\r\n\r\n')
-        
-        except Exception as e:
-            print(f"Error: {e}")
-        finally:
-            client.close()
-    
-    def _serve_html(self, client):
-        """Serve web interface"""
-        html = """<!DOCTYPE html>
-<html>
-<head>
-<title>Fishing Drone</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:Arial,sans-serif}
-#map{height:70vh}
-#panel{padding:20px;background:#2c3e50;color:white}
-h1{font-size:24px;margin-bottom:15px}
-.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:15px 0}
-.stat{background:#34495e;padding:15px;border-radius:5px;text-align:center}
-.stat-value{font-size:28px;font-weight:bold}
-.stat-label{font-size:12px;opacity:0.8}
-button{width:100%;padding:15px;margin:5px 0;border:none;border-radius:5px;font-size:16px;font-weight:bold;cursor:pointer}
-.btn-success{background:#27ae60;color:white}
-.btn-danger{background:#e74c3c;color:white}
-#status{position:fixed;top:20px;right:20px;padding:15px 25px;border-radius:5px;display:none;z-index:9999}
-.status-ok{background:#27ae60;color:white}
-.status-err{background:#e74c3c;color:white}
-</style>
-</head>
-<body>
-<div id="panel">
-<h1>🎣 Fishing Drone</h1>
-<p style="margin:10px 0">Click map to add drop locations</p>
-<div class="stats">
-<div class="stat"><div class="stat-value" id="count">0</div><div class="stat-label">Drops</div></div>
-<div class="stat"><div class="stat-value" id="status-text">Ready</div><div class="stat-label">Status</div></div>
-</div>
-<button class="btn-danger" onclick="clear()">Clear All</button>
-<button class="btn-success" onclick="upload()">Upload to Drone</button>
-</div>
-<div id="map"></div>
-<div id="status"></div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-const map=L.map('map').setView([41.1413,-73.3579],13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-let drops=[],markers=[];
-map.on('click',e=>{
-drops.push({lat:e.latlng.lat,lon:e.latlng.lng,alt:50});
-const m=L.circleMarker([e.latlng.lat,e.latlng.lng],{radius:10,fillColor:'#e74c3c',color:'white',weight:3,fillOpacity:0.9}).addTo(map);
-m.bindPopup(`Drop ${drops.length}<br>${e.latlng.lat.toFixed(6)},${e.latlng.lng.toFixed(6)}`);
-markers.push(m);
-document.getElementById('count').textContent=drops.length;
-});
-function clear(){
-if(!confirm('Clear all drops?'))return;
-drops=[];
-markers.forEach(m=>map.removeLayer(m));
-markers=[];
-document.getElementById('count').textContent=0;
-}
-async function upload(){
-if(drops.length===0){
-show('Add drops first!','err');
-return;
-}
-if(!confirm(`Upload ${drops.length} waypoints?`))return;
-show('Uploading...','ok');
-try{
-const r=await fetch('/api/upload',{
-method:'POST',
-headers:{'Content-Type':'application/json'},
-body:JSON.stringify({drops})
-});
-const d=await r.json();
-if(d.success){
-show(`✓ Uploaded ${drops.length} waypoints!`,'ok');
-document.getElementById('status-text').textContent='Uploaded';
-}else{
-show('Failed: '+d.error,'err');
-}
-}catch(e){
-show('Error: '+e.message,'err');
-}
-}
-function show(msg,type){
-const s=document.getElementById('status');
-s.textContent=msg;
-s.className='status-'+type;
-s.style.display='block';
-setTimeout(()=>s.style.display='none',5000);
-}
-</script>
-</body>
-</html>"""
-        
-        resp = f"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n{html}"
-        client.send(resp.encode())
-    
-    def _api_upload(self, client, body):
-        """Handle mission upload"""
-        try:
-            data = json.loads(body)
-            drops = data.get('drops', [])
+                # Release override if active
+                self.fc.release_override()
             
-            success = self.msp.upload_mission(drops)
+            # Check if at drop point
+            should_drop, drop_idx, distance = self.drop_mgr.check_position(
+                current_lat, current_lon
+            )
             
-            if success:
-                self.mission['drops'] = drops
-                self.mission['status'] = 'uploaded'
-                resp_data = json.dumps({'success': True, 'count': len(drops)})
-            else:
-                resp_data = json.dumps({'success': False, 'error': 'Upload failed'})
+            if should_drop:
+                drop = self.drop_mgr.drops[drop_idx]
+                print(f"\n🎯 AT DROP POINT: {drop['name']}")
+                print(f"   Distance: {distance:.1f}m")
+                
+                # Trigger drop
+                self.servo.release()
+                time.sleep(1)
+                self.servo.reset()
+                
+                # Mark complete
+                self.drop_mgr.mark_dropped(drop_idx)
+                
+                # Check if all done
+                if self.drop_mgr.all_complete():
+                    print("\n🎉 ALL DROPS COMPLETE!")
+                    print("Monitoring continues...\n")
+                
+                print()
             
-            resp = f"HTTP/1.1 200 OK\r\nContent-Type:application/json\r\n\r\n{resp_data}"
-            client.send(resp.encode())
+            # Status update (every 5 seconds)
+            if time.monotonic() - last_status > 5.0:
+                last_status = time.monotonic()
+                
+                # Get nearest drop
+                nearest, dist = self.drop_mgr.get_nearest_drop(
+                    current_lat, current_lon
+                )
+                
+                if nearest:
+                    print(f"Position: {current_lat:.6f}, {current_lon:.6f} | "
+                          f"Next: {nearest['name']} ({dist:.0f}m) | "
+                          f"Sats: {self.gps.satellites} | "
+                          f"Drops: {len(self.drop_mgr.dropped_indices)}/{len(self.drop_mgr.drops)}")
+                else:
+                    print(f"Position: {current_lat:.6f}, {current_lon:.6f} | "
+                          f"All drops complete | "
+                          f"Sats: {self.gps.satellites}")
             
-        except Exception as e:
-            err = json.dumps({'success': False, 'error': str(e)})
-            resp = f"HTTP/1.1 500 Error\r\nContent-Type:application/json\r\n\r\n{err}"
-            client.send(resp.encode())
-    
-    def _api_status(self, client):
-        """Return status"""
-        data = json.dumps({
-            'status': self.mission['status'],
-            'drops': len(self.mission['drops'])
-        })
-        resp = f"HTTP/1.1 200 OK\r\nContent-Type:application/json\r\n\r\n{data}"
-        client.send(resp.encode())
+            time.sleep(0.2)
 
 # ============================================
-# GLOBAL STATE
-# ============================================
-
-collision = False
-collision_dir = "front"
-
-# ============================================
-# THREAD: SBUS CONTROL (70Hz)
-# ============================================
-
-def sbus_thread():
-    """SBUS control loop"""
-    global collision, collision_dir
-    
-    sbus = SBUS(Pins.SBUS_TX)
-    
-    # Initialize channels
-    sbus.set(0, 992)  # Roll
-    sbus.set(1, 992)  # Pitch
-    sbus.set(2, 992)  # Throttle
-    sbus.set(3, 992)  # Yaw
-    sbus.set(4, 1811)  # AUX1 = GPS mode
-    
-    print("SBUS control started")
-    
-    while True:
-        if collision:
-            # Override for collision avoidance
-            intensity = 350
-            
-            if collision_dir == "left":
-                sbus.set(0, 992 + intensity)  # Roll right
-            elif collision_dir == "right":
-                sbus.set(0, 992 - intensity)  # Roll left
-            else:
-                sbus.set(1, 992 - intensity)  # Pitch back
-            
-            sbus.set(4, 172)  # Stabilize mode
-        else:
-            # Normal - let INAV control
-            sbus.set(0, 992)
-            sbus.set(1, 992)
-            sbus.set(4, 1811)  # GPS mode
-        
-        sbus.send()
-        time.sleep(0.014)
-
-# ============================================
-# THREAD: VISION (30fps)
-# ============================================
-
-def vision_thread():
-    """Vision processing loop"""
-    global collision, collision_dir
-    
-    print("Initializing camera...")
-    
-    try:
-        cam = espcamera.Camera(
-            data_pins=[Pins.CAM_D0, Pins.CAM_D1, Pins.CAM_D2, Pins.CAM_D3,
-                      Pins.CAM_D4, Pins.CAM_D5, Pins.CAM_D6, Pins.CAM_D7],
-            external_clock_pin=Pins.CAM_XCLK,
-            pixel_clock_pin=Pins.CAM_PCLK,
-            vsync_pin=Pins.CAM_VSYNC,
-            href_pin=Pins.CAM_HREF,
-            i2c=busio.I2C(scl=Pins.CAM_SCL, sda=Pins.CAM_SDA),
-            powerdown_pin=Pins.CAM_PWDN,
-            reset_pin=Pins.CAM_RESET,
-            external_clock_frequency=20_000_000,
-            framebuffer_count=2,
-            grab_mode=espcamera.GrabMode.WHEN_EMPTY
-        )
-        
-        cam.pixel_format = espcamera.PixelFormat.RGB565
-        cam.frame_size = espcamera.FrameSize.QQVGA
-        
-        print("✓ Camera ready")
-        
-    except Exception as e:
-        print(f"✗ Camera failed: {e}")
-        return
-    
-    detector = CollisionDetector(cam)
-    
-    print("Vision processing started")
-    
-    while True:
-        hit, direction, severity = detector.detect()
-        
-        collision = hit
-        if hit:
-            collision_dir = direction
-            print(f"⚠️ COLLISION: {direction} ({severity})")
-        
-        time.sleep(0.033)
-
-# ============================================
-# MAIN
+# STARTUP
 # ============================================
 
 def main():
-    """Main entry point"""
-    
-    # Status LED
-    led = digitalio.DigitalInOut(Pins.LED)
-    led.direction = digitalio.Direction.OUTPUT
-    led.value = True
-    
-    print("\n" + "="*60)
-    print("FISHING DRONE - AUTONOMOUS SYSTEM")
-    print("="*60 + "\n")
-    
-    # Initialize MSP
-    print("Initializing MSP...")
     try:
-        msp_uart = busio.UART(
-            tx=Pins.MSP_TX,
-            rx=Pins.MSP_RX,
-            baudrate=115200,
-            timeout=0.1
-        )
-        msp = MSP(msp_uart)
-        print("✓ MSP ready\n")
+        controller = BackupController()
+        controller.run()
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Stopped by user")
+        
     except Exception as e:
-        print(f"✗ MSP failed: {e}\n")
-        return
-    
-    # Start threads
-    print("Starting threads...")
-    _thread.start_new_thread(sbus_thread, ())
-    time.sleep(0.5)
-    _thread.start_new_thread(vision_thread, ())
-    time.sleep(0.5)
-    
-    # Run web server on main thread
-    server = WebServer(msp)
-    server.start()
+        print(f"\n✗ Error: {e}")
+        import traceback
+        traceback.print_exception(e, e, e.__traceback__)
 
 # Run
 main()
