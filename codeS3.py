@@ -931,7 +931,7 @@ class BackupController:
     Primary navigation is handled by FC
     """
     
-    def __init__(self):
+    def __iniet__(self):
         print("Initializing backup systems...\n")
         
         # GPS
@@ -955,20 +955,20 @@ class BackupController:
         print("3. Servo:")
         self.servo = BaitReleaser(Config.SERVO_PIN)
         
-        # Camera
-        print("4. Camera:")
-        self.collision = CollisionDetector()
+        # # Camera
+        # print("4. Camera:")
+        # self.collision = CollisionDetector()
         
         # FC controller
-        print("5. FC Interface:")
-        fc_uart = busio.UART(
-            tx=Config.FC_TX,
-            rx=None,
-            baudrate=115200,
-            timeout=0
-        )
-        self.fc = FCController(fc_uart)
-        print("  ✓ FC serial ready\n")
+        # print("5. FC Interface:")
+        # fc_uart = busio.UART(
+        #     tx=Config.FC_TX,
+        #     rx=None,
+        #     baudrate=115200,
+        #     timeout=0
+        # )
+        # self.fc = FCController(fc_uart)
+        # print("  ✓ FC serial ready\n")
         
         # Status LED
         self.led = digitalio.DigitalInOut(board.LED)
@@ -1006,7 +1006,6 @@ class BackupController:
     def run(self):
         """Main monitoring loop"""
         print("="*50)
-        print("BACKUP SYSTEM ACTIVE")
         print("FC handles navigation, Xiao triggers drops")
         print("="*50 + "\n")
         
@@ -1037,16 +1036,16 @@ class BackupController:
             current_lon = self.gps.longitude
             
             # Check for collision
-            collision, direction = self.collision.detect()
+            # collision, direction = self.collision.detect()
             
-            if collision:
-                print(f"⚠️  OBSTACLE DETECTED: {direction.upper()}!")
-                self.fc.send_stop()
-                time.sleep(0.1)
-                continue
-            else:
-                # Release override if active
-                self.fc.release_override()
+            # if collision:
+            #     print(f"⚠️  OBSTACLE DETECTED: {direction.upper()}!")
+            #     self.fc.send_stop()
+            #     time.sleep(0.1)
+            #     continue
+            # else:
+            #     # Release override if active
+            #     self.fc.release_override()
             
             # Check if at drop point
             should_drop, drop_idx, distance = self.drop_mgr.check_position(
